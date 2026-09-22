@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { chatReply } from "../integrations/gemini.js";
-import { addToCart } from "../integrations/shopify.js";
+import { addToCart, loginDemoCustomer, updateCartBuyerIdentity } from "../integrations/shopify.js";
 import { recordOrderEvent } from "../integrations/bloomreach.js";
 import type { ChatSession } from "../types.js";
 
@@ -47,7 +47,7 @@ chatRouter.post("/checkout", async (req, res) => {
     return res.status(404).json({ error: "unknown session" });
   }
 
-  const cart = await addToCart(session.cartId, lineItems);
+  const cart = await addToCart(session.cartId, lineItems, session.customerAccessToken);
   session.cartId = cart.cartId;
 
   // Loop closure is triggered for real once Shopify's order webhook fires;
@@ -55,4 +55,38 @@ chatRouter.post("/checkout", async (req, res) => {
   await recordOrderEvent(session.customerId, "mock-order-id");
 
   res.json(cart);
+});
+
+chatRouter.post("/login", async (req, res) => {
+  const { sessionId } = req.body as { sessionId: string };
+  const session = sessions.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: "unknown session" });
+  }
+
+  const profile = await loginDemoCustomer();
+  session.customerAccessToken = profile.accessToken;
+  session.customerName = profile.firstName;
+
+  if (session.cartId) {
+    await updateCartBuyerIdentity(session.cartId, profile.accessToken);
+  }
+
+  res.json({ loggedIn: true, name: profile.firstName, email: profile.email });
+});
+
+chatRouter.post("/logout", async (req, res) => {
+  const { sessionId } = req.body as { sessionId: string };
+  const session = sessions.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: "unknown session" });
+  }
+
+  if (session.cartId) {
+    await updateCartBuyerIdentity(session.cartId, undefined);
+  }
+  session.customerAccessToken = undefined;
+  session.customerName = undefined;
+
+  res.json({ loggedIn: false });
 });

@@ -11,7 +11,12 @@
 
     /* --- mock product page --- */
     .page { max-width: 720px; margin: 0 auto; padding: 32px 20px 120px; }
-    .breadcrumb { font-size: 13px; color: #888; margin-bottom: 16px; }
+    .breadcrumb { font-size: 13px; color: #888; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; }
+    .auth-toggle {
+      font-size: 12px; padding: 6px 12px; border-radius: 999px; border: 1px solid #ccc;
+      background: #fff; cursor: pointer;
+    }
+    .auth-toggle.logged-in { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
     .product { display: flex; gap: 24px; flex-wrap: wrap; }
     .product img, .product .placeholder-img {
       width: 280px; height: 280px; border-radius: 12px; background: linear-gradient(135deg, #e2e2e2, #cfcfcf);
@@ -104,7 +109,10 @@
 </head>
 <body>
   <div class="page">
-    <div class="breadcrumb">Team Scandiweb / Snowboards</div>
+    <div class="breadcrumb">
+      Team Scandiweb / Snowboards
+      <button id="auth-toggle" class="auth-toggle">Log in</button>
+    </div>
     <div class="product">
       <div class="placeholder-img">Product photo</div>
       <div class="product-info">
@@ -119,7 +127,7 @@
 
   <div id="chat-panel" hidden>
     <div id="chat-header">
-      <span>Need help?</span>
+      <span id="chat-header-title">Need help?</span>
       <button id="chat-close" aria-label="Close chat">✕</button>
     </div>
     <div id="chat-log"></div>

@@ -140,9 +140,71 @@ export async function listProductTypes(): Promise<string[]> {
   return [...new Set(data.products.nodes.map((n) => n.productType).filter(Boolean))];
 }
 
+// Fixed demo shopper used to simulate a logged-in customer for the hackathon
+// demo — a real Customer record in the dev store, not a live sign-up flow.
+const DEMO_CUSTOMER_EMAIL = "demo-shopper@chat-to-buy.test";
+const DEMO_CUSTOMER_PASSWORD = "Demo1234!";
+
+const CUSTOMER_LOGIN_MUTATION = `
+  mutation Login($input: CustomerAccessTokenCreateInput!) {
+    customerAccessTokenCreate(input: $input) {
+      customerAccessToken { accessToken expiresAt }
+      customerUserErrors { field message code }
+    }
+  }
+`;
+
+interface CustomerLoginData {
+  customerAccessTokenCreate: {
+    customerAccessToken: { accessToken: string; expiresAt: string } | null;
+    customerUserErrors: Array<{ field: string[]; message: string; code: string }>;
+  };
+}
+
+const CUSTOMER_PROFILE_QUERY = `
+  query CustomerProfile($customerAccessToken: String!) {
+    customer(customerAccessToken: $customerAccessToken) { firstName lastName email }
+  }
+`;
+
+interface CustomerProfileData {
+  customer: { firstName: string; lastName: string; email: string } | null;
+}
+
+export interface CustomerProfile {
+  accessToken: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+}
+
+/** Logs in the fixed demo customer, simulating an authenticated shopper. */
+export async function loginDemoCustomer(): Promise<CustomerProfile> {
+  if (!config.shopify.storeDomain) {
+    return { accessToken: "mock-token", firstName: "Demo", lastName: "Shopper", email: DEMO_CUSTOMER_EMAIL };
+  }
+
+  const loginData = await storefrontRequest<CustomerLoginData>(CUSTOMER_LOGIN_MUTATION, {
+    input: { email: DEMO_CUSTOMER_EMAIL, password: DEMO_CUSTOMER_PASSWORD },
+  });
+  const { customerAccessToken, customerUserErrors } = loginData.customerAccessTokenCreate;
+  if (customerUserErrors.length > 0 || !customerAccessToken) {
+    throw new Error(`Demo customer login failed: ${customerUserErrors.map((e) => e.message).join(", ")}`);
+  }
+
+  const profileData = await storefrontRequest<CustomerProfileData>(CUSTOMER_PROFILE_QUERY, {
+    customerAccessToken: customerAccessToken.accessToken,
+  });
+  if (!profileData.customer) {
+    throw new Error("Demo customer login failed: no profile returned");
+  }
+
+  return { accessToken: customerAccessToken.accessToken, ...profileData.customer };
+}
+
 const CREATE_CART_MUTATION = `
-  mutation CreateCart($lines: [CartLineInput!]!) {
-    cartCreate(input: { lines: $lines }) {
+  mutation CreateCart($lines: [CartLineInput!]!, $buyerIdentity: CartBuyerIdentityInput) {
+    cartCreate(input: { lines: $lines, buyerIdentity: $buyerIdentity }) {
       cart {
         id
         checkoutUrl
@@ -172,6 +234,33 @@ const ADD_CART_LINES_MUTATION = `
   }
 `;
 
+const UPDATE_CART_BUYER_IDENTITY_MUTATION = `
+  mutation UpdateBuyerIdentity($cartId: ID!, $buyerIdentity: CartBuyerIdentityInput!) {
+    cartBuyerIdentityUpdate(cartId: $cartId, buyerIdentity: $buyerIdentity) {
+      cart { id checkoutUrl totalQuantity }
+      userErrors { field message }
+    }
+  }
+`;
+
+interface UpdateBuyerIdentityData {
+  cartBuyerIdentityUpdate: CartResult;
+}
+
+/**
+ * Attaches (or clears, passing undefined) the logged-in customer's identity on
+ * an already-created cart — used when the customer logs in/out mid-session,
+ * after a cart already exists, so switching the toggle visibly changes who
+ * checkout will recognize.
+ */
+export async function updateCartBuyerIdentity(cartId: string, customerAccessToken: string | undefined): Promise<void> {
+  if (!config.shopify.storeDomain) return;
+  await storefrontRequest<UpdateBuyerIdentityData>(UPDATE_CART_BUYER_IDENTITY_MUTATION, {
+    cartId,
+    buyerIdentity: { customerAccessToken: customerAccessToken ?? null },
+  });
+}
+
 interface CartResult {
   cart: { id: string; checkoutUrl: string; totalQuantity: number } | null;
   userErrors: Array<{ field: string[]; message: string }>;
@@ -198,6 +287,7 @@ export interface CartState extends CartHandoff {
 export async function addToCart(
   existingCartId: string | undefined,
   lineItems: Array<{ variantId: string; quantity: number }>,
+  customerAccessToken?: string,
 ): Promise<CartState> {
   if (!config.shopify.storeDomain) {
     return {
@@ -218,7 +308,12 @@ export async function addToCart(
   const { cart, userErrors } = existingCartId
     ? (await storefrontRequest<AddCartLinesData>(ADD_CART_LINES_MUTATION, { cartId: existingCartId, lines }))
         .cartLinesAdd
-    : (await storefrontRequest<CreateCartData>(CREATE_CART_MUTATION, { lines })).cartCreate;
+    : (
+        await storefrontRequest<CreateCartData>(CREATE_CART_MUTATION, {
+          lines,
+          buyerIdentity: customerAccessToken ? { customerAccessToken } : undefined,
+        })
+      ).cartCreate;
 
   if (userErrors.length > 0) {
     throw new Error(`Cart update failed: ${userErrors.map((e) => e.message).join(", ")}`);

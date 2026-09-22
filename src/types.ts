@@ -17,6 +17,9 @@ export interface ChatSession {
   history: ChatTurn[];
   /** Shopify cart id, once the customer has added a first item this session. */
   cartId?: string;
+  /** Set once the customer "logs in" (demo login toggle) — attached to their cart. */
+  customerAccessToken?: string;
+  customerName?: string;
 }
 
 /** The cart the agent hands off for checkout. */
