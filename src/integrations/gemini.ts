@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import type { ChatSession } from "../types.js";
-import { searchProducts, type ProductSummary } from "./shopify.js";
+import { searchProducts, listProductTypes, type ProductSummary } from "./shopify.js";
 
 /**
  * Gemini is the reasoning layer for the proactive shopping assistant: it
@@ -46,7 +46,12 @@ const SEARCH_PRODUCTS_TOOL = {
         "Search the Shopify catalog for products matching a natural-language query. Call this " +
         "before mentioning or recommending any product, price, or availability — never guess. " +
         "Call it more than once in a turn when building an outfit or bundle (e.g. once for a " +
-        "shirt, again for matching shorts) to ground each complementary suggestion separately.",
+        "shirt, again for matching shorts) to ground each complementary suggestion separately. " +
+        "For 'bestsellers', 'popular', 'trending', or 'what do you recommend', pass an empty " +
+        "query — it returns real sales-ranked catalog picks. It never returns an empty list " +
+        "while the catalog has any stock: a specific search with no matches still returns " +
+        "other in-stock items as a fallback, so treat those as 'here's what we do have' " +
+        "suggestions, not a match for the original request.",
       parameters: {
         type: "object",
         properties: {
@@ -124,6 +129,13 @@ const QUICK_REPLIES_SCHEMA = {
 };
 
 async function suggestQuickReplies(contents: GeminiContent[], lastReply: string): Promise<string[]> {
+  const knownCategories = await listProductTypes().catch(() => [] as string[]);
+  const categoryLine = knownCategories.length
+    ? `The store's actual categories are: ${knownCategories.join(", ")}. Only name a category ` +
+      "from this exact list — never invent or guess one (e.g. don't suggest 'shoes' unless " +
+      "it's literally in this list). "
+    : "";
+
   const data = await generateContent({
     contents: [
       ...contents,
@@ -136,7 +148,9 @@ async function suggestQuickReplies(contents: GeminiContent[], lastReply: string)
               "Based on the conversation above, suggest 2-4 short quick-reply options the " +
               "customer could tap next (e.g. asking about sizes/colors, browsing a category, " +
               "'show more'). Only name a specific product if it appeared in a search_products " +
-              "result above. Never suggest 'add to cart' or checkout actions — the customer " +
+              "result above. " +
+              categoryLine +
+              "Never suggest 'add to cart' or checkout actions — the customer " +
               "does those from the product card's own button, not by typing.",
           },
         ],
@@ -169,7 +183,12 @@ const SYSTEM_PROMPT =
   "widget. You cannot create a cart or checkout yourself and have no access to the " +
   "customer's cart or checkout URL — each product you show appears as a card with its own " +
   "'Add to cart' button, which is how the customer actually buys. If asked to check out or " +
-  "for a checkout link, tell them to click 'Add to cart' on the item they want.";
+  "for a checkout link, tell them to click 'Add to cart' on the item they want. " +
+  "search_products never truly returns nothing — if the exact item asked for isn't there, " +
+  "it hands back other in-stock products instead. Never conclude or claim the store lacks a " +
+  "whole category based on one search; just say the specific item wasn't found and pivot to " +
+  "what the results actually show. Don't apologize for or reference earlier turns being wrong " +
+  "— just give the current, correct answer.";
 
 /** One turn of the shopping conversation, grounded in real Shopify data via tool-calling. */
 export async function chatReply(session: ChatSession, latestMessage: string): Promise<ChatReplyResult> {

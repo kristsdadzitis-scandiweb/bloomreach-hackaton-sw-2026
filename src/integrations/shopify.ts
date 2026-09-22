@@ -43,11 +43,12 @@ async function storefrontRequest<T>(query: string, variables: Record<string, unk
 }
 
 const SEARCH_PRODUCTS_QUERY = `
-  query SearchProducts($query: String!, $first: Int!) {
-    products(query: $query, first: $first) {
+  query SearchProducts($query: String!, $first: Int!, $sortKey: ProductSortKeys!) {
+    products(query: $query, first: $first, sortKey: $sortKey) {
       nodes {
         handle
         title
+        productType
         availableForSale
         priceRange {
           minVariantPrice { amount currencyCode }
@@ -65,6 +66,7 @@ interface SearchProductsData {
     nodes: Array<{
       handle: string;
       title: string;
+      productType: string;
       availableForSale: boolean;
       priceRange: { minVariantPrice: { amount: string; currencyCode: string } };
       variants: { nodes: Array<{ id: string }> };
@@ -72,19 +74,11 @@ interface SearchProductsData {
   };
 }
 
-/** Ground a customer question in real catalog data. */
-export async function searchProducts(query: string): Promise<ProductSummary[]> {
-  if (!config.shopify.storeDomain) {
-    return mockProducts(query);
-  }
+const BROAD_QUERY_TERMS = /bestsell|best.sell|popular|trending|featured|recommend/i;
 
-  const data = await storefrontRequest<SearchProductsData>(SEARCH_PRODUCTS_QUERY, {
-    query,
-    first: 5,
-  });
-
+function toSummaries(nodes: SearchProductsData["products"]["nodes"]): ProductSummary[] {
   // Out-of-stock items can't be added to cart, so never surface them as an option.
-  return data.products.nodes
+  return nodes
     .filter((node) => node.availableForSale)
     .map((node) => ({
       handle: node.handle,
@@ -93,6 +87,57 @@ export async function searchProducts(query: string): Promise<ProductSummary[]> {
       available: node.availableForSale,
       variantId: node.variants.nodes[0]?.id ?? "",
     }));
+}
+
+/**
+ * Fetches a real, sales-ranked slice of the catalog — Shopify's actual
+ * BEST_SELLING sort, not an invented list. Used both for genuine "bestsellers"
+ * asks and as the fallback when a specific search comes up empty, so the
+ * model always has real products to talk about instead of concluding a
+ * category doesn't exist.
+ */
+async function bestSelling(): Promise<ProductSummary[]> {
+  const data = await storefrontRequest<SearchProductsData>(SEARCH_PRODUCTS_QUERY, {
+    query: "",
+    first: 5,
+    sortKey: "BEST_SELLING",
+  });
+  return toSummaries(data.products.nodes);
+}
+
+/** Ground a customer question in real catalog data. */
+export async function searchProducts(query: string): Promise<ProductSummary[]> {
+  if (!config.shopify.storeDomain) {
+    return mockProducts(query);
+  }
+
+  if (!query.trim() || BROAD_QUERY_TERMS.test(query)) {
+    return bestSelling();
+  }
+
+  const data = await storefrontRequest<SearchProductsData>(SEARCH_PRODUCTS_QUERY, {
+    query,
+    first: 5,
+    sortKey: "RELEVANCE",
+  });
+  const results = toSummaries(data.products.nodes);
+  // Never dead-end on zero results — fall back to what's actually in stock so
+  // the model can say "we don't have that specific thing, but here's what we
+  // do have" instead of guessing or wrongly concluding the catalog is empty.
+  return results.length > 0 ? results : bestSelling();
+}
+
+/** Real product types/categories in the catalog — used to keep suggestions grounded. */
+export async function listProductTypes(): Promise<string[]> {
+  if (!config.shopify.storeDomain) {
+    return [];
+  }
+  const data = await storefrontRequest<SearchProductsData>(SEARCH_PRODUCTS_QUERY, {
+    query: "",
+    first: 50,
+    sortKey: "RELEVANCE",
+  });
+  return [...new Set(data.products.nodes.map((n) => n.productType).filter(Boolean))];
 }
 
 const CREATE_CART_MUTATION = `
