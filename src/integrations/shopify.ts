@@ -83,13 +83,16 @@ export async function searchProducts(query: string): Promise<ProductSummary[]> {
     first: 5,
   });
 
-  return data.products.nodes.map((node) => ({
-    handle: node.handle,
-    title: node.title,
-    priceRange: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
-    available: node.availableForSale,
-    variantId: node.variants.nodes[0]?.id ?? "",
-  }));
+  // Out-of-stock items can't be added to cart, so never surface them as an option.
+  return data.products.nodes
+    .filter((node) => node.availableForSale)
+    .map((node) => ({
+      handle: node.handle,
+      title: node.title,
+      priceRange: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
+      available: node.availableForSale,
+      variantId: node.variants.nodes[0]?.id ?? "",
+    }));
 }
 
 const CREATE_CART_MUTATION = `
@@ -98,6 +101,7 @@ const CREATE_CART_MUTATION = `
       cart {
         id
         checkoutUrl
+        totalQuantity
       }
       userErrors {
         field
@@ -107,19 +111,56 @@ const CREATE_CART_MUTATION = `
   }
 `;
 
-interface CreateCartData {
-  cartCreate: {
-    cart: { id: string; checkoutUrl: string } | null;
-    userErrors: Array<{ field: string[]; message: string }>;
-  };
+const ADD_CART_LINES_MUTATION = `
+  mutation AddCartLines($cartId: ID!, $lines: [CartLineInput!]!) {
+    cartLinesAdd(cartId: $cartId, lines: $lines) {
+      cart {
+        id
+        checkoutUrl
+        totalQuantity
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+interface CartResult {
+  cart: { id: string; checkoutUrl: string; totalQuantity: number } | null;
+  userErrors: Array<{ field: string[]; message: string }>;
 }
 
-/** Build the cart and hand back a checkout URL. */
-export async function createCart(
+interface CreateCartData {
+  cartCreate: CartResult;
+}
+
+interface AddCartLinesData {
+  cartLinesAdd: CartResult;
+}
+
+export interface CartState extends CartHandoff {
+  cartId: string;
+  totalQuantity: number;
+}
+
+/**
+ * Add items to the customer's cart for this session — creates it on the first
+ * add, appends lines to the existing cart (so repeated "Add to cart" clicks
+ * build up one real cart) on every add after that.
+ */
+export async function addToCart(
+  existingCartId: string | undefined,
   lineItems: Array<{ variantId: string; quantity: number }>,
-): Promise<CartHandoff> {
+): Promise<CartState> {
   if (!config.shopify.storeDomain) {
-    return { checkoutUrl: "https://example-dev-store.myshopify.com/cart/mock-checkout", lineItems };
+    return {
+      cartId: existingCartId ?? "mock-cart",
+      checkoutUrl: "https://example-dev-store.myshopify.com/cart/mock-checkout",
+      lineItems,
+      totalQuantity: lineItems.reduce((sum, item) => sum + item.quantity, 0),
+    };
   }
 
   const lines = lineItems.map((item) => ({
@@ -129,18 +170,19 @@ export async function createCart(
       : `gid://shopify/ProductVariant/${item.variantId}`,
   }));
 
-  const data = await storefrontRequest<CreateCartData>(CREATE_CART_MUTATION, { lines });
-  const { cart, userErrors } = data.cartCreate;
+  const { cart, userErrors } = existingCartId
+    ? (await storefrontRequest<AddCartLinesData>(ADD_CART_LINES_MUTATION, { cartId: existingCartId, lines }))
+        .cartLinesAdd
+    : (await storefrontRequest<CreateCartData>(CREATE_CART_MUTATION, { lines })).cartCreate;
 
   if (userErrors.length > 0) {
-    throw new Error(`Cart creation failed: ${userErrors.map((e) => e.message).join(", ")}`);
+    throw new Error(`Cart update failed: ${userErrors.map((e) => e.message).join(", ")}`);
   }
   if (!cart) {
-    throw new Error("Cart creation failed: no cart returned");
+    throw new Error("Cart update failed: no cart returned");
   }
 
-  // Note: dev store checkout pages are password-protected — factor that into the demo.
-  return { checkoutUrl: cart.checkoutUrl, lineItems };
+  return { cartId: cart.id, checkoutUrl: cart.checkoutUrl, lineItems, totalQuantity: cart.totalQuantity };
 }
 
 function mockProducts(query: string): ProductSummary[] {

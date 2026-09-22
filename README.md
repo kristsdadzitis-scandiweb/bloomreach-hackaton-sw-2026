@@ -10,7 +10,7 @@ Built for the **Composable AI Hackathon 2026** (Bloomreach × Google × Shopify 
 
 1. **Proactive prompt** (frontend) — a chat bubble pops up while the customer browses, with quick-reply chips to lower the bar to engage.
 2. **Chat & compare** (Gemini + Shopify) — Gemini decides when to ground itself in the real catalog via tool-calling (never invents price/stock), and reasons about complementary items ("what goes with this?") by searching for each piece separately.
-3. **Cart & handoff** (Shopify) — builds a real cart and hands back a checkout URL, opened in a popup window reserved synchronously on click (so the mock page and chat stay open behind it). Shopify's Checkout Kit (Web, early preview) was tried first but its `.open()` call landed after the async cart-creation call, which browsers no longer treat as a user-gesture-triggered popup — it flashed open and was immediately killed. Worth revisiting once the SDK matures.
+3. **Cart & handoff** (Shopify) — each "Add to cart" click adds to one real Shopify cart for the session (creating it on the first add, appending lines after that), and a persistent cart bar in the chat surfaces a real checkout link the customer clicks when ready. Only in-stock products are ever suggested or shown. Both Shopify's Checkout Kit (Web, early preview) and a `window.open()`-based popup were tried first, but a checkout link the customer clicks directly is the only approach immune to popup-blocker timing quirks.
 4. **Loop closure** (Bloomreach) — the completed order is tracked back onto the customer's real profile via the Engagement Track API.
 
 ## Stack

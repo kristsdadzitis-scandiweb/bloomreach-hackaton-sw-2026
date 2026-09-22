@@ -43,22 +43,24 @@ function appendBubble(role, text) {
 }
 
 function appendProductCards(products) {
-  if (!products?.length) return;
+  const inStock = (products ?? []).filter((p) => p.available && p.variantId);
+  if (!inStock.length) return;
   const wrap = document.createElement("div");
   wrap.className = "product-cards";
 
-  for (const product of products) {
+  for (const product of inStock) {
     const card = document.createElement("div");
     card.className = "product-card";
     card.innerHTML = `
       <div class="thumb"></div>
       <div class="info">
         <div class="title">${product.title}</div>
-        <p class="price">${product.priceRange}${product.available ? "" : " · out of stock"}</p>
+        <p class="price">${product.priceRange}</p>
       </div>
-      <button ${product.available ? "" : "disabled"}>Add to cart</button>
+      <button>Add to cart</button>
     `;
-    card.querySelector("button").addEventListener("click", (e) => checkout(product, e));
+    const btn = card.querySelector("button");
+    btn.addEventListener("click", () => addProductToCart(product, btn));
     wrap.appendChild(card);
   }
 
@@ -115,30 +117,35 @@ async function sendMessage(message) {
   renderQuickReplies(data.quickReplies);
 }
 
-async function checkout(product) {
-  // Reserve the popup synchronously, in direct response to the click — by the
-  // time the cart is created below, the browser no longer treats a fresh
-  // window.open() as user-gesture-triggered and silently kills it. Navigating
-  // an already-open window later doesn't have that restriction.
-  const popup = window.open("", "checkout", "width=480,height=760");
+const cartBar = document.getElementById("cart-bar");
+const cartCountEl = document.getElementById("cart-count");
+const cartLink = document.getElementById("cart-link");
 
-  await ensureSession();
-  const res = await fetch("/api/chat/checkout", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, lineItems: [{ variantId: product.variantId, quantity: 1 }] }),
-  });
-  const cart = await res.json();
-  presentCheckout(cart.checkoutUrl, popup);
+async function addProductToCart(product, btn) {
+  btn.disabled = true;
+  btn.textContent = "Adding…";
+  try {
+    await ensureSession();
+    const res = await fetch("/api/chat/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, lineItems: [{ variantId: product.variantId, quantity: 1 }] }),
+    });
+    const cart = await res.json();
+    btn.textContent = "Added ✓";
+    showCartBar(cart);
+  } catch {
+    btn.disabled = false;
+    btn.textContent = "Add to cart";
+  }
 }
 
-function presentCheckout(checkoutUrl, popup) {
-  if (popup && !popup.closed) {
-    popup.location.href = checkoutUrl;
-    popup.focus();
-    return;
-  }
-  window.open(checkoutUrl, "_blank");
+// A real <a href> the customer clicks directly satisfies every browser's
+// popup-blocker check on its own — no window.open() timing games needed.
+function showCartBar(cart) {
+  cartCountEl.textContent = cart.totalQuantity;
+  cartLink.href = cart.checkoutUrl;
+  cartBar.hidden = false;
 }
 
 // --- proactive trigger ---

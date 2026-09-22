@@ -83,6 +83,17 @@
     }
     #quick-replies button:hover { background: #f0f0f0; }
 
+    #cart-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 10px 12px; background: #f6f6f6; border-top: 1px solid #eee; font-size: 13px;
+    }
+    #cart-bar[hidden] { display: none; }
+    #cart-link {
+      background: #1a1a1a; color: #fff; text-decoration: none; padding: 8px 14px;
+      border-radius: 8px; font-size: 13px; font-weight: 600;
+    }
+    #cart-link:hover { background: #333; }
+
     #chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eee; }
     #chat-input { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }
     #chat-form button[type="submit"] {
@@ -113,6 +124,10 @@
     </div>
     <div id="chat-log"></div>
     <div id="quick-replies"></div>
+    <div id="cart-bar" hidden>
+      <span><span id="cart-count">0</span> item(s) in cart</span>
+      <a id="cart-link" href="#" target="_blank" rel="noopener">Go to checkout</a>
+    </div>
     <form id="chat-form">
       <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off">
       <button type="submit">Send</button>

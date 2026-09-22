@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { chatReply } from "../integrations/gemini.js";
-import { createCart } from "../integrations/shopify.js";
+import { addToCart } from "../integrations/shopify.js";
 import { recordOrderEvent } from "../integrations/bloomreach.js";
 import type { ChatSession } from "../types.js";
 
@@ -47,7 +47,8 @@ chatRouter.post("/checkout", async (req, res) => {
     return res.status(404).json({ error: "unknown session" });
   }
 
-  const cart = await createCart(lineItems);
+  const cart = await addToCart(session.cartId, lineItems);
+  session.cartId = cart.cartId;
 
   // Loop closure is triggered for real once Shopify's order webhook fires;
   // stubbed here so the full loop is visible end to end in local dev.
