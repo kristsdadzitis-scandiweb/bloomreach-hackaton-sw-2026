@@ -9,7 +9,10 @@ export const config = {
 
   bloomreach: {
     loomiConnectUrl: required("BLOOMREACH_LOOMI_CONNECT_URL"),
+    apiBaseUrl: required("BLOOMREACH_API_BASE_URL", "https://api-engagement.bloomreach.com"),
     projectToken: required("BLOOMREACH_PROJECT_TOKEN"),
+    apiToken: required("BLOOMREACH_API_TOKEN"),
+    customerIdField: required("BLOOMREACH_CUSTOMER_ID_FIELD", "registered"),
     webhookSecret: required("BLOOMREACH_WEBHOOK_SECRET"),
   },
 
