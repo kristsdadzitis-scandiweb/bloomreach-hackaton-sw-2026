@@ -2,7 +2,7 @@ import { config } from "../config.js";
 import type { CartHandoff } from "../types.js";
 
 /**
- * Step 4 + 5: Shopify grounds the conversation in real stock/price, then builds the cart.
+ * Shopify grounds the conversation in real stock/price, then builds the cart.
  * Calls the Storefront API (GraphQL) directly against the dev store.
  */
 
@@ -11,6 +11,7 @@ export interface ProductSummary {
   title: string;
   priceRange: string;
   available: boolean;
+  variantId: string;
 }
 
 interface StorefrontResponse<T> {
@@ -51,6 +52,9 @@ const SEARCH_PRODUCTS_QUERY = `
         priceRange {
           minVariantPrice { amount currencyCode }
         }
+        variants(first: 1) {
+          nodes { id }
+        }
       }
     }
   }
@@ -63,11 +67,12 @@ interface SearchProductsData {
       title: string;
       availableForSale: boolean;
       priceRange: { minVariantPrice: { amount: string; currencyCode: string } };
+      variants: { nodes: Array<{ id: string }> };
     }>;
   };
 }
 
-/** Step 4: ground a customer question in real catalog data. */
+/** Ground a customer question in real catalog data. */
 export async function searchProducts(query: string): Promise<ProductSummary[]> {
   if (!config.shopify.storeDomain) {
     return mockProducts(query);
@@ -83,6 +88,7 @@ export async function searchProducts(query: string): Promise<ProductSummary[]> {
     title: node.title,
     priceRange: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
     available: node.availableForSale,
+    variantId: node.variants.nodes[0]?.id ?? "",
   }));
 }
 
@@ -108,7 +114,7 @@ interface CreateCartData {
   };
 }
 
-/** Step 5: build the cart and hand back a checkout URL. */
+/** Build the cart and hand back a checkout URL. */
 export async function createCart(
   lineItems: Array<{ variantId: string; quantity: number }>,
 ): Promise<CartHandoff> {
@@ -139,6 +145,12 @@ export async function createCart(
 
 function mockProducts(query: string): ProductSummary[] {
   return [
-    { handle: "mock-product-1", title: `Mock result for "${query}"`, priceRange: "$49.00", available: true },
+    {
+      handle: "mock-product-1",
+      title: `Mock result for "${query}"`,
+      priceRange: "$49.00",
+      available: true,
+      variantId: "gid://shopify/ProductVariant/0",
+    },
   ];
 }

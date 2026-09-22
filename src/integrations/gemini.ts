@@ -1,18 +1,17 @@
 import { config } from "../config.js";
-import type { ChatSession, DriftContext, OutreachDecision } from "../types.js";
+import type { ChatSession } from "../types.js";
 import { searchProducts, type ProductSummary } from "./shopify.js";
 
 /**
- * Step 2 + step 4: Gemini is the reasoning layer — decides who's worth contacting,
- * drafts the opener, and runs the shopping conversation. Both steps use real
- * function-calling so the model grounds itself in Shopify data instead of
- * inventing product handles.
+ * Gemini is the reasoning layer for the proactive shopping assistant: it
+ * decides when to ground itself in real Shopify data via tool-calling,
+ * reasons about complementary products, and suggests quick-reply chips.
  */
 
 interface GeminiPart {
   text?: string;
-  functionCall?: { name: string; args: Record<string, unknown> };
-  functionResponse?: { name: string; response: Record<string, unknown> };
+  functionCall?: { id?: string; name: string; args: Record<string, unknown> };
+  functionResponse?: { id?: string; name: string; response: Record<string, unknown> };
 }
 
 interface GeminiContent {
@@ -44,8 +43,10 @@ const SEARCH_PRODUCTS_TOOL = {
     {
       name: "search_products",
       description:
-        "Search the Shopify catalog for products matching a natural-language query. Use this " +
-        "before mentioning or recommending any product, price, or availability — never guess.",
+        "Search the Shopify catalog for products matching a natural-language query. Call this " +
+        "before mentioning or recommending any product, price, or availability — never guess. " +
+        "Call it more than once in a turn when building an outfit or bundle (e.g. once for a " +
+        "shirt, again for matching shorts) to ground each complementary suggestion separately.",
       parameters: {
         type: "object",
         properties: {
@@ -68,117 +69,109 @@ const SEARCH_PRODUCTS_TOOL = {
 async function runSearchToolLoop(
   contents: GeminiContent[],
   systemPrompt: string,
-  maxSteps = 3,
+  maxSteps = 6,
 ): Promise<{ parts: GeminiPart[]; products: ProductSummary[] }> {
-  let products: ProductSummary[] = [];
+  const products: ProductSummary[] = [];
 
   for (let step = 0; step < maxSteps; step++) {
+    const lastStep = step === maxSteps - 1;
     const data = await generateContent({
       contents,
-      tools: [SEARCH_PRODUCTS_TOOL],
+      // Withhold the tool on the last step so the model is forced to answer
+      // in text instead of exhausting the budget on another function call.
+      ...(lastStep ? {} : { tools: [SEARCH_PRODUCTS_TOOL] }),
       systemInstruction: { parts: [{ text: systemPrompt }] },
     });
 
     const parts = data.candidates?.[0]?.content?.parts ?? [];
-    const functionCallPart = parts.find((p) => p.functionCall);
+    // The model can call the tool more than once in the same turn (e.g. one
+    // search per item in an outfit) — every functionCall needs a matching
+    // functionResponse, paired by id, or the conversation state corrupts.
+    const functionCallParts = parts.filter((p) => p.functionCall);
 
-    if (!functionCallPart?.functionCall) {
+    if (functionCallParts.length === 0) {
       return { parts, products };
     }
 
     contents.push({ role: "model", parts });
 
-    const { name, args } = functionCallPart.functionCall;
-    const result = name === "search_products" ? await searchProducts(String(args.query ?? "")) : { error: `unknown tool ${name}` };
-    if (name === "search_products") {
-      products = result as ProductSummary[];
+    const responseParts: GeminiPart[] = [];
+    for (const part of functionCallParts) {
+      const { id, name, args } = part.functionCall!;
+      const result = name === "search_products" ? await searchProducts(String(args.query ?? "")) : { error: `unknown tool ${name}` };
+      if (name === "search_products") {
+        products.push(...(result as ProductSummary[]));
+      }
+      responseParts.push({ functionResponse: { id, name, response: { result } } });
     }
 
-    contents.push({
-      role: "function",
-      parts: [{ functionResponse: { name, response: { result } } }],
-    });
+    contents.push({ role: "function", parts: responseParts });
   }
 
   return { parts: [], products };
 }
 
-/** Step 2: decide whether this customer is worth contacting, and draft the opener. */
-export async function decideOutreach(context: DriftContext): Promise<OutreachDecision> {
-  if (!config.google.geminiApiKey) {
-    return mockDecision(context);
-  }
+const QUICK_REPLIES_SCHEMA = {
+  type: "object",
+  properties: {
+    quickReplies: {
+      type: "array",
+      items: { type: "string" },
+      description: "2-4 short (under 5 words) suggested replies the customer could tap next.",
+    },
+  },
+  required: ["quickReplies"],
+};
 
-  const prompt = `A repeat customer's purchase rhythm has drifted. Weigh engagement, predicted
-lifetime value, and how long they've drifted to decide whether to reach out, then draft a short,
-warm opener referencing their category affinity if it's worth contacting them. If you recommend
-products, first use search_products to confirm they actually exist and are in stock.
-
-Customer signals:
-- Days since last purchase: ${context.daysSinceLastPurchase}
-- Purchase frequency trend: ${context.purchaseFrequencyTrend}
-- Engagement score (0-1): ${context.engagementScore}
-- Top category affinity: ${context.topCategoryAffinity}
-- Predicted lifetime value: ${context.predictedLifetimeValue}
-- Last purchased product: ${context.lastPurchasedProduct ?? "unknown"}`;
-
-  const contents: GeminiContent[] = [{ role: "user", parts: [{ text: prompt }] }];
-
-  const { parts } = await runSearchToolLoop(
-    contents,
-    "Before recommending any product, call search_products to confirm it actually exists in " +
-      "the catalog and is available. Never invent product handles.",
-    2,
-  );
-  if (parts.length) {
-    contents.push({ role: "model", parts });
-  }
-
-  contents.push({
-    role: "user",
-    parts: [
+async function suggestQuickReplies(contents: GeminiContent[], lastReply: string): Promise<string[]> {
+  const data = await generateContent({
+    contents: [
+      ...contents,
+      { role: "model", parts: [{ text: lastReply }] },
       {
-        text:
-          "Based on the conversation above, respond with the final decision as JSON. Only include " +
-          "product handles that came back from a search_products result above — if none fit, use an empty array.",
+        role: "user",
+        parts: [
+          {
+            text:
+              "Based on the conversation above, suggest 2-4 short quick-reply options the " +
+              "customer could tap next (e.g. sizes, colors, 'add to cart', 'show more').",
+          },
+        ],
       },
     ],
+    generationConfig: { responseMimeType: "application/json", responseSchema: QUICK_REPLIES_SCHEMA },
   });
 
-  const finalData = await generateContent({
-    contents,
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "object",
-        properties: {
-          worthContacting: { type: "boolean" },
-          channel: { type: "string", enum: ["sms", "email"] },
-          openingMessage: { type: "string" },
-          recommendedProductHandles: { type: "array", items: { type: "string" } },
-          reason: { type: "string" },
-        },
-        required: ["worthContacting", "channel", "openingMessage", "recommendedProductHandles", "reason"],
-      },
-    },
-  });
-
-  const text = finalData.candidates?.[0]?.content?.parts?.find((p) => p.text)?.text;
-  if (!text) {
-    throw new Error("Gemini returned no decision content");
+  const text = data.candidates?.[0]?.content?.parts?.find((p) => p.text)?.text;
+  if (!text) return [];
+  try {
+    return (JSON.parse(text) as { quickReplies: string[] }).quickReplies ?? [];
+  } catch {
+    return [];
   }
-  return JSON.parse(text) as OutreachDecision;
 }
 
 export interface ChatReplyResult {
   reply: string;
   products: ProductSummary[];
+  quickReplies: string[];
 }
 
-/** Step 4: one turn of the shopping conversation, grounded in real Shopify data via tool-calling. */
+const SYSTEM_PROMPT =
+  "You are a proactive on-site shopping assistant. Ground every product, price, or " +
+  "availability claim in the search_products tool — never invent catalog data. When a " +
+  "customer is building an outfit or bundle, suggest complementary items (e.g. a shirt " +
+  "and matching shorts) by searching for each piece separately. Keep replies short and " +
+  "conversational, suited to a chat widget.";
+
+/** One turn of the shopping conversation, grounded in real Shopify data via tool-calling. */
 export async function chatReply(session: ChatSession, latestMessage: string): Promise<ChatReplyResult> {
   if (!config.google.geminiApiKey) {
-    return { reply: `[gemini:stub] (would answer: "${latestMessage}")`, products: [] };
+    return {
+      reply: `[gemini:stub] (would answer: "${latestMessage}")`,
+      products: [],
+      quickReplies: [],
+    };
   }
 
   const contents: GeminiContent[] = session.history.map((turn) => ({
@@ -186,27 +179,15 @@ export async function chatReply(session: ChatSession, latestMessage: string): Pr
     parts: [{ text: turn.message }],
   }));
 
-  const { parts, products } = await runSearchToolLoop(
-    contents,
-    "You are a shopping assistant. Ground every product, price, or availability claim in the " +
-      "search_products tool — never invent catalog data.",
-  );
+  const { parts, products } = await runSearchToolLoop(contents, SYSTEM_PROMPT);
 
   const text = parts
     .map((p) => p.text)
     .filter(Boolean)
     .join("\n");
+  const reply = text || "Sorry, I'm having trouble with that — could you try rephrasing?";
 
-  return { reply: text || "Sorry, I'm having trouble with that — could you try rephrasing?", products };
-}
+  const quickReplies = await suggestQuickReplies(contents, reply);
 
-function mockDecision(context: DriftContext): OutreachDecision {
-  const worthContacting = context.engagementScore > 0.2 || context.predictedLifetimeValue > 100;
-  return {
-    worthContacting,
-    channel: context.engagementScore < 0.4 ? "sms" : "email",
-    openingMessage: `Hey — noticed you haven't checked out ${context.topCategoryAffinity} in a while. New arrivals just landed.`,
-    recommendedProductHandles: [],
-    reason: "mock decision — replace with a real Gemini call",
-  };
+  return { reply, products, quickReplies };
 }

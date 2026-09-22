@@ -1,30 +1,10 @@
 /**
- * Shared types for the Chat-to-Buy loop.
- * Mirrors the five steps in the architecture diagram:
- * detect drift -> decide & draft -> reach out -> chat & compare -> cart & handoff.
+ * Shared types for the proactive shopping assistant.
+ * A customer browsing the site gets a proactive chat prompt, the agent helps
+ * pick products (and complements), then hands off a Shopify cart for checkout.
  */
 
-/** Step 1: what Bloomreach's webhook hands us about a drifting customer. */
-export interface DriftContext {
-  customerId: string;
-  daysSinceLastPurchase: number;
-  purchaseFrequencyTrend: "steady" | "slowing" | "stopped";
-  engagementScore: number; // 0-1, recent email/SMS/web engagement
-  topCategoryAffinity: string;
-  predictedLifetimeValue: number;
-  lastPurchasedProduct?: string;
-}
-
-/** Step 2: Gemini's decision about whether/how to reach out. */
-export interface OutreachDecision {
-  worthContacting: boolean;
-  channel: "sms" | "email";
-  openingMessage: string;
-  recommendedProductHandles: string[];
-  reason: string;
-}
-
-/** A single turn in the step-4 shopping conversation. */
+/** A single turn in the shopping conversation. */
 export interface ChatTurn {
   role: "customer" | "agent";
   message: string;
@@ -37,7 +17,7 @@ export interface ChatSession {
   history: ChatTurn[];
 }
 
-/** Step 5: the cart the agent hands off for checkout. */
+/** The cart the agent hands off for checkout. */
 export interface CartHandoff {
   checkoutUrl: string;
   lineItems: Array<{ variantId: string; quantity: number }>;

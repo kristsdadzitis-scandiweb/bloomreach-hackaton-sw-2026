@@ -1,18 +1,10 @@
 import { config } from "../config.js";
-import type { DriftContext, OutreachDecision } from "../types.js";
 
 /**
- * Step 3 + loop closure: Bloomreach is the activation and system-of-record layer.
- * Both outbound calls go through the Engagement Track API rather than Loomi Connect —
- * Loomi Connect's documented auth is SSO, which doesn't fit an unattended server call.
- * A Bloomreach scenario triggers off these tracked events to do the actual sending.
+ * Loop closure: Bloomreach is the system-of-record layer. Once a chat
+ * session closes a sale, the order event is tracked back onto the real
+ * customer profile via the Engagement Track API.
  */
-
-/** Verifies the shared secret on an inbound scenario webhook call (step 1/3 trigger). */
-export function verifyWebhookSignature(providedSecret: string | undefined): boolean {
-  if (!config.bloomreach.webhookSecret) return true; // secret not configured yet — allow through locally
-  return providedSecret === config.bloomreach.webhookSecret;
-}
 
 async function trackEvent(
   customerId: string,
@@ -37,21 +29,6 @@ async function trackEvent(
   if (!res.ok || body.success === false) {
     throw new Error(`Bloomreach track event error: ${JSON.stringify(body)}`);
   }
-}
-
-/** Step 3: track the drafted outreach so a Bloomreach scenario can send the SMS/email. */
-export async function sendOutreach(context: DriftContext, decision: OutreachDecision): Promise<void> {
-  if (!config.bloomreach.apiToken) {
-    console.log(`[bloomreach:stub] would send ${decision.channel} to ${context.customerId}: "${decision.openingMessage}"`);
-    return;
-  }
-
-  await trackEvent(context.customerId, "chat_to_buy_outreach_decided", {
-    channel: decision.channel,
-    opening_message: decision.openingMessage,
-    reason: decision.reason,
-    recommended_product_handles: decision.recommendedProductHandles,
-  });
 }
 
 /** Loop closure: write the order event back so Bloomreach's profile + nurture sequence pick it up. */

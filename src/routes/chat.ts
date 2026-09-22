@@ -6,7 +6,7 @@ import { recordOrderEvent } from "../integrations/bloomreach.js";
 import type { ChatSession } from "../types.js";
 
 /**
- * Step 4: the conversation the deep link opens. Extremely lean in-memory session
+ * The proactive shopping conversation. Extremely lean in-memory session
  * store for now — fine for a hackathon demo, revisit if it needs to survive
  * across Cloud Run instances.
  */
@@ -30,11 +30,11 @@ chatRouter.post("/message", async (req, res) => {
 
   session.history.push({ role: "customer", message, timestamp: new Date().toISOString() });
 
-  const { reply, products } = await chatReply(session, message);
+  const { reply, products, quickReplies } = await chatReply(session, message);
 
   session.history.push({ role: "agent", message: reply, timestamp: new Date().toISOString() });
 
-  res.json({ reply, products });
+  res.json({ reply, products, quickReplies });
 });
 
 chatRouter.post("/checkout", async (req, res) => {

@@ -3,26 +3,120 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Chat-to-Buy</title>
+  <title>Team Scandiweb</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; }
-    #log { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 360px; overflow-y: auto; margin-bottom: 12px; }
-    .msg { margin-bottom: 8px; }
-    .msg.customer { text-align: right; color: #2a4d3e; }
-    .msg.agent { text-align: left; color: #333; }
-    form { display: flex; gap: 8px; }
-    input { flex: 1; padding: 8px; }
-    button { padding: 8px 16px; }
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; background: #fafafa; color: #1a1a1a; }
+
+    /* --- mock product page --- */
+    .page { max-width: 720px; margin: 0 auto; padding: 32px 20px 120px; }
+    .breadcrumb { font-size: 13px; color: #888; margin-bottom: 16px; }
+    .product { display: flex; gap: 24px; flex-wrap: wrap; }
+    .product img, .product .placeholder-img {
+      width: 280px; height: 280px; border-radius: 12px; background: linear-gradient(135deg, #e2e2e2, #cfcfcf);
+      display: flex; align-items: center; justify-content: center; color: #999; font-size: 13px; flex-shrink: 0;
+    }
+    .product-info { flex: 1; min-width: 240px; }
+    .product-info h1 { font-size: 22px; margin: 0 0 8px; }
+    .price { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+    .buy-btn {
+      background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 12px 24px;
+      font-size: 15px; cursor: pointer;
+    }
+    .buy-btn:hover { background: #333; }
+
+    /* --- proactive chat launcher --- */
+    #chat-launcher {
+      position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; border-radius: 50%;
+      background: #1a1a1a; color: #fff; border: none; font-size: 24px; cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.25); z-index: 20;
+    }
+    #chat-launcher[hidden] { display: none; }
+
+    /* --- chat panel --- */
+    #chat-panel {
+      position: fixed; bottom: 20px; right: 20px; width: 340px; max-width: calc(100vw - 40px);
+      height: 480px; max-height: calc(100vh - 40px); background: #fff; border-radius: 14px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.25); display: flex; flex-direction: column; overflow: hidden;
+      z-index: 30; animation: slide-in 0.25s ease-out;
+    }
+    #chat-panel[hidden] { display: none; }
+    @keyframes slide-in { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+    #chat-header {
+      background: #1a1a1a; color: #fff; padding: 12px 14px; display: flex; align-items: center;
+      justify-content: space-between; font-size: 14px; font-weight: 600;
+    }
+    #chat-close { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; line-height: 1; }
+
+    #chat-log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .bubble { max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
+    .bubble.customer { align-self: flex-end; background: #1a1a1a; color: #fff; border-bottom-right-radius: 2px; }
+    .bubble.agent { align-self: flex-start; background: #f0f0f0; color: #1a1a1a; border-bottom-left-radius: 2px; }
+
+    .product-cards { align-self: flex-start; display: flex; flex-direction: column; gap: 8px; max-width: 90%; }
+    .product-card { border: 1px solid #e0e0e0; border-radius: 10px; padding: 8px 10px; display: flex; align-items: center; gap: 10px; }
+    .product-card .thumb {
+      width: 40px; height: 40px; border-radius: 6px; background: linear-gradient(135deg, #e2e2e2, #cfcfcf); flex-shrink: 0;
+    }
+    .product-card .info { flex: 1; min-width: 0; }
+    .product-card .info .title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .product-card .info .price { font-size: 12px; color: #666; margin: 0; }
+    .product-card button {
+      font-size: 12px; padding: 6px 10px; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer;
+    }
+    .product-card button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #quick-replies { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
+    #quick-replies button {
+      font-size: 12px; padding: 6px 10px; border-radius: 999px; border: 1px solid #ccc; background: #fff; cursor: pointer;
+    }
+    #quick-replies button:hover { background: #f0f0f0; }
+
+    #chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eee; }
+    #chat-input { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }
+    #chat-form button[type="submit"] {
+      padding: 8px 14px; border-radius: 8px; border: none; background: #1a1a1a; color: #fff; cursor: pointer;
+    }
+
   </style>
 </head>
 <body>
-  <h1>Chat-to-Buy</h1>
-  <p>Placeholder chat UI — the surface a deep-link opens for step 4 of the loop.</p>
-  <div id="log"></div>
-  <form id="chat-form">
-    <input id="chat-input" type="text" placeholder="Ask about a product…" autocomplete="off">
-    <button type="submit">Send</button>
-  </form>
+  <div class="page">
+    <div class="breadcrumb">Team Scandiweb / Snowboards</div>
+    <div class="product">
+      <div class="placeholder-img">Product photo</div>
+      <div class="product-info">
+        <h1>The Complete Snowboard</h1>
+        <div class="price">€1650.00</div>
+        <button class="buy-btn" id="page-buy-btn">Add to cart</button>
+      </div>
+    </div>
+  </div>
+
+  <button id="chat-launcher" aria-label="Open chat">💬</button>
+
+  <div id="chat-panel" hidden>
+    <div id="chat-header">
+      <span>Need help?</span>
+      <button id="chat-close" aria-label="Close chat">✕</button>
+    </div>
+    <div id="chat-log"></div>
+    <div id="quick-replies"></div>
+    <form id="chat-form">
+      <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off">
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  <!-- Shopify Checkout Kit (Web, alpha) — https://github.com/Shopify/checkout-kit -->
+  <shopify-checkout id="shopify-checkout" target="auto"></shopify-checkout>
+
+  <script type="module">
+    import "https://cdn.jsdelivr.net/npm/@shopify/checkout-kit@4.0.0-alpha.4/+esm";
+    window.__checkoutKitReady = true;
+  </script>
   <script src="app.js"></script>
 </body>
 </html>
