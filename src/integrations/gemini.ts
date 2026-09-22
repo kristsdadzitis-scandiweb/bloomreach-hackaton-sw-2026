@@ -134,7 +134,10 @@ async function suggestQuickReplies(contents: GeminiContent[], lastReply: string)
           {
             text:
               "Based on the conversation above, suggest 2-4 short quick-reply options the " +
-              "customer could tap next (e.g. sizes, colors, 'add to cart', 'show more').",
+              "customer could tap next (e.g. asking about sizes/colors, browsing a category, " +
+              "'show more'). Only name a specific product if it appeared in a search_products " +
+              "result above. Never suggest 'add to cart' or checkout actions — the customer " +
+              "does those from the product card's own button, not by typing.",
           },
         ],
       },
@@ -159,10 +162,14 @@ export interface ChatReplyResult {
 
 const SYSTEM_PROMPT =
   "You are a proactive on-site shopping assistant. Ground every product, price, or " +
-  "availability claim in the search_products tool — never invent catalog data. When a " +
-  "customer is building an outfit or bundle, suggest complementary items (e.g. a shirt " +
-  "and matching shorts) by searching for each piece separately. Keep replies short and " +
-  "conversational, suited to a chat widget.";
+  "availability claim in the search_products tool — never invent catalog data, and never " +
+  "mention a product you haven't just searched for. When a customer is building an outfit " +
+  "or bundle, suggest complementary items (e.g. a shirt and matching shorts) by searching " +
+  "for each piece separately. Keep replies short and conversational, suited to a chat " +
+  "widget. You cannot create a cart or checkout yourself and have no access to the " +
+  "customer's cart or checkout URL — each product you show appears as a card with its own " +
+  "'Add to cart' button, which is how the customer actually buys. If asked to check out or " +
+  "for a checkout link, tell them to click 'Add to cart' on the item they want.";
 
 /** One turn of the shopping conversation, grounded in real Shopify data via tool-calling. */
 export async function chatReply(session: ChatSession, latestMessage: string): Promise<ChatReplyResult> {

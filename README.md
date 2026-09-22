@@ -10,14 +10,14 @@ Built for the **Composable AI Hackathon 2026** (Bloomreach × Google × Shopify 
 
 1. **Proactive prompt** (frontend) — a chat bubble pops up while the customer browses, with quick-reply chips to lower the bar to engage.
 2. **Chat & compare** (Gemini + Shopify) — Gemini decides when to ground itself in the real catalog via tool-calling (never invents price/stock), and reasons about complementary items ("what goes with this?") by searching for each piece separately.
-3. **Cart & handoff** (Shopify) — builds a real cart and hands back a checkout URL; the front end embeds it via Shopify's Checkout Kit (Web, early preview) so checkout happens without a full-page redirect, falling back to a plain link if the preview SDK misbehaves.
+3. **Cart & handoff** (Shopify) — builds a real cart and hands back a checkout URL, opened in a popup window reserved synchronously on click (so the mock page and chat stay open behind it). Shopify's Checkout Kit (Web, early preview) was tried first but its `.open()` call landed after the async cart-creation call, which browsers no longer treat as a user-gesture-triggered popup — it flashed open and was immediately killed. Worth revisiting once the SDK matures.
 4. **Loop closure** (Bloomreach) — the completed order is tracked back onto the customer's real profile via the Engagement Track API.
 
 ## Stack
 
 - **Runtime**: Node.js 22+, TypeScript, Express
 - **Hosting**: Google Cloud Run (single container serves the chat widget + API)
-- **Platforms**: Google (Gemini) · Shopify (Storefront API, Checkout Kit) · Bloomreach (Engagement Track API)
+- **Platforms**: Google (Gemini) · Shopify (Storefront API) · Bloomreach (Engagement Track API)
 
 ## Project structure
 
@@ -58,4 +58,4 @@ gcloud run deploy chat-to-buy --source . --region <region> --allow-unauthenticat
 
 ## Status
 
-Shopify, Gemini, and Bloomreach integrations are wired to real APIs and tested against the hackathon sandbox. Checkout Kit's Web SDK is alpha software — verify it renders in a real browser before demoing.
+Shopify, Gemini, and Bloomreach integrations are wired to real APIs and tested against the hackathon sandbox.

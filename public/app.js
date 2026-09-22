@@ -6,7 +6,6 @@ const quickRepliesEl = document.getElementById("quick-replies");
 const form = document.getElementById("chat-form");
 const input = document.getElementById("chat-input");
 const pageBuyBtn = document.getElementById("page-buy-btn");
-const checkoutEl = document.getElementById("shopify-checkout");
 
 let sessionId = null;
 let opened = false;
@@ -20,6 +19,19 @@ function openChat() {
 function closeChat() {
   panel.hidden = true;
   launcher.hidden = false;
+}
+
+function showThinking() {
+  const el = document.createElement("div");
+  el.className = "bubble agent thinking";
+  el.id = "thinking-bubble";
+  el.innerHTML = "<span></span><span></span><span></span>";
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+function hideThinking() {
+  document.getElementById("thinking-bubble")?.remove();
 }
 
 function appendBubble(role, text) {
@@ -46,7 +58,7 @@ function appendProductCards(products) {
       </div>
       <button ${product.available ? "" : "disabled"}>Add to cart</button>
     `;
-    card.querySelector("button").addEventListener("click", () => checkout(product));
+    card.querySelector("button").addEventListener("click", (e) => checkout(product, e));
     wrap.appendChild(card);
   }
 
@@ -84,18 +96,32 @@ async function sendMessage(message) {
   renderQuickReplies([]);
 
   await ensureSession();
-  const res = await fetch("/api/chat/message", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, message }),
-  });
-  const data = await res.json();
+  showThinking();
+
+  let data;
+  try {
+    const res = await fetch("/api/chat/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, message }),
+    });
+    data = await res.json();
+  } finally {
+    hideThinking();
+  }
+
   appendBubble("agent", data.reply);
   appendProductCards(data.products);
   renderQuickReplies(data.quickReplies);
 }
 
 async function checkout(product) {
+  // Reserve the popup synchronously, in direct response to the click — by the
+  // time the cart is created below, the browser no longer treats a fresh
+  // window.open() as user-gesture-triggered and silently kills it. Navigating
+  // an already-open window later doesn't have that restriction.
+  const popup = window.open("", "checkout", "width=480,height=760");
+
   await ensureSession();
   const res = await fetch("/api/chat/checkout", {
     method: "POST",
@@ -103,18 +129,14 @@ async function checkout(product) {
     body: JSON.stringify({ sessionId, lineItems: [{ variantId: product.variantId, quantity: 1 }] }),
   });
   const cart = await res.json();
-  presentCheckout(cart.checkoutUrl);
+  presentCheckout(cart.checkoutUrl, popup);
 }
 
-function presentCheckout(checkoutUrl) {
-  if (window.__checkoutKitReady && checkoutEl && typeof checkoutEl.open === "function") {
-    try {
-      checkoutEl.setAttribute("src", checkoutUrl);
-      checkoutEl.open();
-      return;
-    } catch (err) {
-      console.error("Checkout Kit failed, falling back to a plain link:", err);
-    }
+function presentCheckout(checkoutUrl, popup) {
+  if (popup && !popup.closed) {
+    popup.location.href = checkoutUrl;
+    popup.focus();
+    return;
   }
   window.open(checkoutUrl, "_blank");
 }
@@ -152,10 +174,3 @@ form.addEventListener("submit", async (e) => {
   input.value = "";
   await sendMessage(message);
 });
-
-if (checkoutEl) {
-  checkoutEl.addEventListener("ec.complete", (event) => {
-    appendBubble("agent", "🎉 Order placed! Thanks for shopping with us.");
-    console.log("Order complete", event.detail?.checkout?.order?.id);
-  });
-}
