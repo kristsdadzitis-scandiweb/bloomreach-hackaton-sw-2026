@@ -198,7 +198,10 @@ const DEMO_DELIVERY_ADDRESS = {
   provinceCode: "TX",
   zip: "78701",
   countryCode: "US",
-  phone: "+15555550123",
+  // Real Austin (512) area code + the 555 exchange's NANP-reserved fictional
+  // line range (0100-0199) — "+1 555-555-0123" fails validation because 555
+  // isn't a real area code, only a fictional exchange within a real one.
+  phone: "+15125550123",
 };
 
 const CUSTOMER_LOGIN_MUTATION = `
