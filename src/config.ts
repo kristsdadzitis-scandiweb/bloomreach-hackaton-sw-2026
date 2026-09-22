@@ -12,7 +12,7 @@ export const config = {
     apiBaseUrl: required("BLOOMREACH_API_BASE_URL", "https://api-engagement.bloomreach.com"),
     projectToken: required("BLOOMREACH_PROJECT_TOKEN"),
     apiToken: required("BLOOMREACH_API_TOKEN"),
-    customerIdField: required("BLOOMREACH_CUSTOMER_ID_FIELD", "registered"),
+    customerIdField: required("BLOOMREACH_CUSTOMER_ID_FIELD", "cookie"),
     webhookSecret: required("BLOOMREACH_WEBHOOK_SECRET"),
   },
 
