@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { chatReply } from "../integrations/gemini.js";
-import { createCart, searchProducts } from "../integrations/shopify.js";
+import { createCart } from "../integrations/shopify.js";
 import { recordOrderEvent } from "../integrations/bloomreach.js";
 import type { ChatSession } from "../types.js";
 
@@ -30,9 +30,7 @@ chatRouter.post("/message", async (req, res) => {
 
   session.history.push({ role: "customer", message, timestamp: new Date().toISOString() });
 
-  const products = await searchProducts(message);
-  const productContext = products.map((p) => `${p.title} (${p.priceRange})`).join(", ");
-  const reply = await chatReply(session, productContext);
+  const { reply, products } = await chatReply(session, message);
 
   session.history.push({ role: "agent", message: reply, timestamp: new Date().toISOString() });
 
