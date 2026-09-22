@@ -205,7 +205,13 @@ export async function chatReply(session: ChatSession, latestMessage: string): Pr
     parts: [{ text: turn.message }],
   }));
 
-  const { parts, products } = await runSearchToolLoop(contents, SYSTEM_PROMPT);
+  const pageContext = session.currentProduct
+    ? `\n\nThe customer is currently on the product page for "${session.currentProduct.title}" ` +
+      `(${session.currentProduct.priceRange}${session.currentProduct.available ? "" : ", out of stock"}). ` +
+      "If they use a pronoun like 'this' or 'it' without naming a product, assume they mean this one."
+    : "";
+
+  const { parts, products } = await runSearchToolLoop(contents, SYSTEM_PROMPT + pageContext);
 
   const text = parts
     .map((p) => p.text)

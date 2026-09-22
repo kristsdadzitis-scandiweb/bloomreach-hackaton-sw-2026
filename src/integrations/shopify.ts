@@ -127,6 +127,48 @@ export async function searchProducts(query: string): Promise<ProductSummary[]> {
   return results.length > 0 ? results : bestSelling();
 }
 
+const PRODUCT_BY_HANDLE_QUERY = `
+  query ProductByHandle($handle: String!) {
+    product(handle: $handle) {
+      handle
+      title
+      productType
+      availableForSale
+      priceRange {
+        minVariantPrice { amount currencyCode }
+      }
+      variants(first: 1) {
+        nodes { id }
+      }
+    }
+  }
+`;
+
+interface ProductByHandleData {
+  product: SearchProductsData["products"]["nodes"][number] | null;
+}
+
+/**
+ * Resolves the real product a customer is currently looking at, by page
+ * handle — unlike search, this doesn't filter out an out-of-stock product,
+ * since the bot still needs to know what page it's on to answer questions.
+ */
+export async function getProductByHandle(handle: string): Promise<ProductSummary | null> {
+  if (!config.shopify.storeDomain) {
+    return null;
+  }
+  const data = await storefrontRequest<ProductByHandleData>(PRODUCT_BY_HANDLE_QUERY, { handle });
+  const node = data.product;
+  if (!node) return null;
+  return {
+    handle: node.handle,
+    title: node.title,
+    priceRange: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
+    available: node.availableForSale,
+    variantId: node.variants.nodes[0]?.id ?? "",
+  };
+}
+
 /** Real product types/categories in the catalog — used to keep suggestions grounded. */
 export async function listProductTypes(): Promise<string[]> {
   if (!config.shopify.storeDomain) {
@@ -144,6 +186,20 @@ export async function listProductTypes(): Promise<string[]> {
 // demo — a real Customer record in the dev store, not a live sign-up flow.
 const DEMO_CUSTOMER_EMAIL = "demo-shopper@chat-to-buy.test";
 const DEMO_CUSTOMER_PASSWORD = "Demo1234!";
+
+// A generated shipping address for the demo customer, so a logged-in checkout
+// only needs a payment method — never a real address, since this only ever
+// attaches to the fixed demo account, not a real shopper.
+const DEMO_DELIVERY_ADDRESS = {
+  firstName: "Demo",
+  lastName: "Shopper",
+  address1: "123 Market Street",
+  city: "Austin",
+  provinceCode: "TX",
+  zip: "78701",
+  countryCode: "US",
+  phone: "+15555550123",
+};
 
 const CUSTOMER_LOGIN_MUTATION = `
   mutation Login($input: CustomerAccessTokenCreateInput!) {
@@ -203,8 +259,8 @@ export async function loginDemoCustomer(): Promise<CustomerProfile> {
 }
 
 const CREATE_CART_MUTATION = `
-  mutation CreateCart($lines: [CartLineInput!]!, $buyerIdentity: CartBuyerIdentityInput) {
-    cartCreate(input: { lines: $lines, buyerIdentity: $buyerIdentity }) {
+  mutation CreateCart($lines: [CartLineInput!]!, $buyerIdentity: CartBuyerIdentityInput, $delivery: CartDeliveryInput) {
+    cartCreate(input: { lines: $lines, buyerIdentity: $buyerIdentity, delivery: $delivery }) {
       cart {
         id
         checkoutUrl
@@ -217,6 +273,28 @@ const CREATE_CART_MUTATION = `
     }
   }
 `;
+
+const ADD_CART_DELIVERY_ADDRESS_MUTATION = `
+  mutation AddDeliveryAddress($cartId: ID!, $addresses: [CartSelectableAddressInput!]!) {
+    cartDeliveryAddressesAdd(cartId: $cartId, addresses: $addresses) {
+      cart { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+interface AddDeliveryAddressData {
+  cartDeliveryAddressesAdd: { cart: { id: string } | null; userErrors: Array<{ field: string[]; message: string }> };
+}
+
+/** Retroactively attaches the demo shipping address — used when login happens after a cart already exists. */
+export async function attachDemoDeliveryAddress(cartId: string): Promise<void> {
+  if (!config.shopify.storeDomain) return;
+  await storefrontRequest<AddDeliveryAddressData>(ADD_CART_DELIVERY_ADDRESS_MUTATION, {
+    cartId,
+    addresses: [{ selected: true, oneTimeUse: false, address: { deliveryAddress: DEMO_DELIVERY_ADDRESS } }],
+  });
+}
 
 const ADD_CART_LINES_MUTATION = `
   mutation AddCartLines($cartId: ID!, $lines: [CartLineInput!]!) {
@@ -312,6 +390,11 @@ export async function addToCart(
         await storefrontRequest<CreateCartData>(CREATE_CART_MUTATION, {
           lines,
           buyerIdentity: customerAccessToken ? { customerAccessToken } : undefined,
+          // Only the demo login gets a pre-filled address — a real guest
+          // checkout should still look like a normal empty checkout.
+          delivery: customerAccessToken
+            ? { addresses: [{ selected: true, oneTimeUse: false, address: { deliveryAddress: DEMO_DELIVERY_ADDRESS } }] }
+            : undefined,
         })
       ).cartCreate;
 

@@ -20,6 +20,15 @@ export interface ChatSession {
   /** Set once the customer "logs in" (demo login toggle) — attached to their cart. */
   customerAccessToken?: string;
   customerName?: string;
+  /** The real product the customer's current page is showing, if any. */
+  currentProduct?: ProductPageContext;
+}
+
+export interface ProductPageContext {
+  handle: string;
+  title: string;
+  priceRange: string;
+  available: boolean;
 }
 
 /** The cart the agent hands off for checkout. */

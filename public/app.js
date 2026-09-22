@@ -85,10 +85,11 @@ async function ensureSession() {
   if (sessionId) return sessionId;
   const params = new URLSearchParams(window.location.search);
   const customerId = params.get("customer") ?? "demo-customer";
+  const productHandle = document.querySelector(".product")?.dataset.productHandle;
   const res = await fetch("/api/chat/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customerId }),
+    body: JSON.stringify({ customerId, productHandle }),
   });
   const data = await res.json();
   sessionId = data.sessionId;

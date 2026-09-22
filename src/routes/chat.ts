@@ -1,7 +1,13 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { chatReply } from "../integrations/gemini.js";
-import { addToCart, loginDemoCustomer, updateCartBuyerIdentity } from "../integrations/shopify.js";
+import {
+  addToCart,
+  attachDemoDeliveryAddress,
+  getProductByHandle,
+  loginDemoCustomer,
+  updateCartBuyerIdentity,
+} from "../integrations/shopify.js";
 import { recordOrderEvent } from "../integrations/bloomreach.js";
 import type { ChatSession } from "../types.js";
 
@@ -14,10 +20,19 @@ export const chatRouter = Router();
 
 const sessions = new Map<string, ChatSession>();
 
-chatRouter.post("/session", (req, res) => {
+chatRouter.post("/session", async (req, res) => {
   const sessionId = randomUUID();
-  const customerId = req.body?.customerId ?? "unknown";
-  sessions.set(sessionId, { sessionId, customerId, history: [] });
+  const { customerId, productHandle } = req.body as { customerId?: string; productHandle?: string };
+  const session: ChatSession = { sessionId, customerId: customerId ?? "unknown", history: [] };
+
+  if (productHandle) {
+    const product = await getProductByHandle(productHandle);
+    if (product) {
+      session.currentProduct = product;
+    }
+  }
+
+  sessions.set(sessionId, session);
   res.json({ sessionId });
 });
 
@@ -70,6 +85,7 @@ chatRouter.post("/login", async (req, res) => {
 
   if (session.cartId) {
     await updateCartBuyerIdentity(session.cartId, profile.accessToken);
+    await attachDemoDeliveryAddress(session.cartId);
   }
 
   res.json({ loggedIn: true, name: profile.firstName, email: profile.email });
