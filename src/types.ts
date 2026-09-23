@@ -9,6 +9,8 @@ export interface ChatTurn {
   role: "customer" | "agent";
   message: string;
   timestamp: string;
+  /** Product cards shown alongside an agent turn, if search_products was called. */
+  products?: ProductPageContext[];
 }
 
 export interface ChatSession {

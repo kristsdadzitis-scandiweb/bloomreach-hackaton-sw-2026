@@ -57,7 +57,12 @@ chatRouter.post("/message", async (req, res) => {
 
   const { reply, products, quickReplies } = await chatReply(session, message);
 
-  session.history.push({ role: "agent", message: reply, timestamp: new Date().toISOString() });
+  session.history.push({
+    role: "agent",
+    message: reply,
+    timestamp: new Date().toISOString(),
+    products: products.filter((p) => p.available && p.variantId),
+  });
 
   res.json({ reply, products, quickReplies });
 });

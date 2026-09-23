@@ -85,7 +85,9 @@
     .ctb-product-card .ctb-thumb {
       width: 40px; height: 40px; border-radius: 6px; background: linear-gradient(135deg, #e2e2e2, #cfcfcf); flex-shrink: 0;
     }
-    .ctb-product-card .ctb-info { flex: 1; min-width: 0; }
+    .ctb-product-card .ctb-thumb-link { display: block; flex-shrink: 0; }
+    .ctb-product-card .ctb-info { flex: 1; min-width: 0; text-decoration: none; color: inherit; display: block; }
+    .ctb-product-card .ctb-info:hover .ctb-title { text-decoration: underline; }
     .ctb-product-card .ctb-info .ctb-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ctb-product-card .ctb-info .ctb-price { font-size: 12px; color: #666; margin: 0; }
     .ctb-product-card button {
@@ -234,12 +236,13 @@
     for (const product of inStock) {
       const card = document.createElement("div");
       card.className = "ctb-product-card";
+      const href = product.handle ? `/products/${product.handle}` : "#";
       card.innerHTML = `
-        <div class="ctb-thumb"></div>
-        <div class="ctb-info">
+        <a class="ctb-thumb-link" href="${href}"><div class="ctb-thumb"></div></a>
+        <a class="ctb-info" href="${href}">
           <div class="ctb-title">${product.title}</div>
           <p class="ctb-price">${product.priceRange}</p>
-        </div>
+        </a>
         <button>Add to cart</button>
       `;
       const btn = card.querySelector("button");
@@ -281,6 +284,7 @@
         if (data.history?.length) {
           for (const turn of data.history) {
             appendBubble(turn.role, turn.message);
+            if (turn.products?.length) appendProductCards(turn.products);
           }
           if (getStoredOpenState()) openChat();
         } else if (getStoredOpenState()) {
