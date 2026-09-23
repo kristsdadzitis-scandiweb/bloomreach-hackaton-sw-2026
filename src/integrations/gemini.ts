@@ -43,21 +43,33 @@ const SEARCH_PRODUCTS_TOOL = {
     {
       name: "search_products",
       description:
-        "Search the Shopify catalog for products matching a natural-language query. Call this " +
-        "before mentioning or recommending any product, price, or availability — never guess. " +
+        "Search the Shopify catalog. This is LITERAL KEYWORD MATCHING against each product's " +
+        "title, type, and tags — not a semantic or attribute filter. It has no concept of price " +
+        "tier, quality, or fit for purpose. Call this before mentioning or recommending any " +
+        "product, price, or availability — never guess. " +
+        "Query construction: use only concrete words likely to appear verbatim in a real " +
+        "product's title or type — a category ('snowboard', 'shirt'), a color, a material. Drop " +
+        "subjective or comparative words ('cheap', 'best', 'warm', 'durable', 'good for " +
+        "beginners', 'most popular color') from the query itself — they won't match anything " +
+        "literally and will waste the search. Instead, search on the plain category/item alone, " +
+        "then reason over the returned prices/titles/details yourself to answer the actual " +
+        "question (e.g. compare the returned prices to find 'the cheapest one'). " +
+        "For 'bestsellers'/'popular'/'trending'/'what do you recommend', pass an empty query — " +
+        "it returns real sales-ranked catalog picks (this is the one case where a vague ask " +
+        "maps directly to a real, non-literal sort, so it's fine as the query itself). " +
         "Call it more than once in a turn when building an outfit or bundle (e.g. once for a " +
         "shirt, again for matching shorts) to ground each complementary suggestion separately. " +
-        "For 'bestsellers', 'popular', 'trending', or 'what do you recommend', pass an empty " +
-        "query — it returns real sales-ranked catalog picks. It never returns an empty list " +
-        "while the catalog has any stock: a specific search with no matches still returns " +
-        "other in-stock items as a fallback, so treat those as 'here's what we do have' " +
-        "suggestions, not a match for the original request.",
+        "It never returns an empty list while the catalog has any stock: a query with no " +
+        "literal matches still returns other in-stock items as a fallback — treat those as " +
+        "'here's what we do have' suggestions, not a match for the original request.",
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
-            description: "Natural-language search query, e.g. a product type, color, or keyword.",
+            description:
+              "Literal keyword(s) likely to appear in a real product's title/type — a category, " +
+              "color, or material. Never a subjective or comparative word like 'cheap' or 'best'.",
           },
         },
         required: ["query"],
@@ -188,7 +200,13 @@ const SYSTEM_PROMPT =
   "it hands back other in-stock products instead. Never conclude or claim the store lacks a " +
   "whole category based on one search; just say the specific item wasn't found and pivot to " +
   "what the results actually show. Don't apologize for or reference earlier turns being wrong " +
-  "— just give the current, correct answer.";
+  "— just give the current, correct answer. " +
+  "Before calling search_products, think about what's actually a literal keyword versus your " +
+  "own judgment call — the tool matches text, it doesn't understand comparisons, quality, or " +
+  "fit for purpose. Search on the concrete noun (a category, color, material), then apply the " +
+  "comparison or judgment yourself over the results it returns (e.g. compare their real prices " +
+  "to answer 'which is cheapest', or use their titles/types to judge 'which suits a beginner'). " +
+  "Never let an unrelated fallback result stand in for something you actually reasoned about.";
 
 /** One turn of the shopping conversation, grounded in real Shopify data via tool-calling. */
 export async function chatReply(session: ChatSession, latestMessage: string): Promise<ChatReplyResult> {
