@@ -12,6 +12,7 @@ export interface ProductSummary {
   priceRange: string;
   available: boolean;
   variantId: string;
+  image?: string;
 }
 
 interface StorefrontResponse<T> {
@@ -50,6 +51,7 @@ const SEARCH_PRODUCTS_QUERY = `
         title
         productType
         availableForSale
+        featuredImage { url }
         priceRange {
           minVariantPrice { amount currencyCode }
         }
@@ -68,6 +70,7 @@ interface SearchProductsData {
       title: string;
       productType: string;
       availableForSale: boolean;
+      featuredImage: { url: string } | null;
       priceRange: { minVariantPrice: { amount: string; currencyCode: string } };
       variants: { nodes: Array<{ id: string }> };
     }>;
@@ -94,6 +97,7 @@ function toSummaries(nodes: SearchProductsData["products"]["nodes"]): ProductSum
       priceRange: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
       available: node.availableForSale,
       variantId: node.variants.nodes[0]?.id ?? "",
+      image: node.featuredImage?.url,
     }));
 }
 
@@ -169,6 +173,7 @@ const PRODUCT_BY_HANDLE_QUERY = `
       title
       productType
       availableForSale
+      featuredImage { url }
       priceRange {
         minVariantPrice { amount currencyCode }
       }
@@ -201,6 +206,7 @@ export async function getProductByHandle(handle: string): Promise<ProductSummary
     priceRange: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
     available: node.availableForSale,
     variantId: node.variants.nodes[0]?.id ?? "",
+    image: node.featuredImage?.url,
   };
 }
 

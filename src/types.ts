@@ -33,6 +33,7 @@ export interface ProductPageContext {
   available: boolean;
   /** So the page's own "Add to cart" button can add this exact variant. */
   variantId: string;
+  image?: string;
 }
 
 /** The cart the agent hands off for checkout. */

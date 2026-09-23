@@ -84,6 +84,7 @@
     .ctb-product-card { border: 1px solid #e0e0e0; border-radius: 10px; padding: 8px 10px; display: flex; align-items: center; gap: 10px; }
     .ctb-product-card .ctb-thumb {
       width: 40px; height: 40px; border-radius: 6px; background: linear-gradient(135deg, #e2e2e2, #cfcfcf); flex-shrink: 0;
+      object-fit: cover; display: block;
     }
     .ctb-product-card .ctb-thumb-link { display: block; flex-shrink: 0; }
     .ctb-product-card .ctb-info { flex: 1; min-width: 0; text-decoration: none; color: inherit; display: block; }
@@ -193,11 +194,21 @@
     } catch {}
   }
 
+  function scrollToBottom() {
+    // While the panel is [hidden] (display:none), scrollHeight reads 0, so
+    // bubbles appended during history replay don't actually scroll anything —
+    // do it again once the panel is visible and has real layout.
+    requestAnimationFrame(() => {
+      log.scrollTop = log.scrollHeight;
+    });
+  }
+
   function openChat() {
     panel.hidden = false;
     launcher.hidden = true;
     opened = true;
     setStoredOpenState(true);
+    scrollToBottom();
   }
 
   function closeChat() {
@@ -237,8 +248,11 @@
       const card = document.createElement("div");
       card.className = "ctb-product-card";
       const href = product.handle ? `/products/${product.handle}` : "#";
+      const thumb = product.image
+        ? `<img class="ctb-thumb" src="${product.image}" alt="${product.title}">`
+        : `<div class="ctb-thumb"></div>`;
       card.innerHTML = `
-        <a class="ctb-thumb-link" href="${href}"><div class="ctb-thumb"></div></a>
+        <a class="ctb-thumb-link" href="${href}">${thumb}</a>
         <a class="ctb-info" href="${href}">
           <div class="ctb-title">${product.title}</div>
           <p class="ctb-price">${product.priceRange}</p>
