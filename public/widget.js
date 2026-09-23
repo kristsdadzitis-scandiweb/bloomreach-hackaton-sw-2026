@@ -49,16 +49,18 @@
     #chat-to-buy-widget { all: initial; font-family: system-ui, sans-serif; }
     #chat-to-buy-widget * { box-sizing: border-box; }
     #ctb-launcher {
-      position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; border-radius: 50%;
+      position: fixed !important; bottom: 20px !important; right: 20px !important; top: auto !important; left: auto !important;
+      width: 60px; height: 60px; border-radius: 50%;
       background: #1a1a1a; color: #fff; border: none; font-size: 24px; cursor: pointer;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.25); z-index: 2147483000;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.25); z-index: 2147483000 !important;
     }
     #ctb-launcher[hidden] { display: none; }
     #ctb-panel {
-      position: fixed; bottom: 20px; right: 20px; width: 340px; max-width: calc(100vw - 40px);
+      position: fixed !important; bottom: 20px !important; right: 20px !important; top: auto !important; left: auto !important;
+      width: 340px; max-width: calc(100vw - 40px);
       height: 480px; max-height: calc(100vh - 40px); background: #fff; border-radius: 14px;
       box-shadow: 0 8px 32px rgba(0,0,0,0.25); display: flex; flex-direction: column; overflow: hidden;
-      z-index: 2147483000; color: #1a1a1a;
+      z-index: 2147483000 !important; color: #1a1a1a;
     }
     #ctb-panel[hidden] { display: none; }
     #ctb-header {
@@ -132,7 +134,12 @@
       </form>
     </div>
   `;
-  document.body.appendChild(root);
+  // Attached to <html> rather than <body> — many OS 2.0 themes (Horizon
+  // included) apply a CSS transform to <body> for page-transition
+  // animations, which makes it the containing block for any descendant
+  // position:fixed element instead of the real viewport. Living outside
+  // <body> avoids inheriting that.
+  document.documentElement.appendChild(root);
 
   const launcher = root.querySelector("#ctb-launcher");
   const panel = root.querySelector("#ctb-panel");
