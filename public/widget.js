@@ -160,15 +160,48 @@
     headerTitle.textContent = `Hi, ${config.customer.firstName} 👋`;
   }
 
+  // A real storefront reloads the whole page on every navigation, so nothing
+  // in module state survives moving from one page to the next — persist the
+  // session id and open/closed state so the chat picks up where it left off
+  // instead of resetting on every page.
+  const STORAGE_SESSION_KEY = "chat-to-buy-session-id";
+  const STORAGE_OPEN_KEY = "chat-to-buy-was-open";
+  function getStoredSessionId() {
+    try {
+      return localStorage.getItem(STORAGE_SESSION_KEY);
+    } catch {
+      return null;
+    }
+  }
+  function setStoredSessionId(id) {
+    try {
+      localStorage.setItem(STORAGE_SESSION_KEY, id);
+    } catch {}
+  }
+  function getStoredOpenState() {
+    try {
+      return localStorage.getItem(STORAGE_OPEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+  function setStoredOpenState(isOpen) {
+    try {
+      localStorage.setItem(STORAGE_OPEN_KEY, isOpen ? "1" : "0");
+    } catch {}
+  }
+
   function openChat() {
     panel.hidden = false;
     launcher.hidden = true;
     opened = true;
+    setStoredOpenState(true);
   }
 
   function closeChat() {
     panel.hidden = true;
     launcher.hidden = false;
+    setStoredOpenState(false);
   }
 
   function showThinking() {
@@ -238,10 +271,27 @@
           body: JSON.stringify({
             customerId: config.customer?.id || anonymousId(),
             productHandle: currentProductHandle(),
+            sessionId: getStoredSessionId(),
           }),
         });
         const data = await res.json();
         sessionId = data.sessionId;
+        setStoredSessionId(sessionId);
+
+        if (data.history?.length) {
+          for (const turn of data.history) {
+            appendBubble(turn.role, turn.message);
+          }
+          if (getStoredOpenState()) openChat();
+        } else if (getStoredOpenState()) {
+          // No real conversation yet, but the panel was open (they'd seen the
+          // proactive greeting) when they navigated — restore it immediately
+          // instead of making them wait through the timer again.
+          triggerProactiveGreeting();
+        } else {
+          setTimeout(triggerProactiveGreeting, 5000);
+        }
+
         return sessionId;
       })();
     }
@@ -308,8 +358,6 @@
     appendBubble("agent", PROACTIVE_GREETING);
     renderQuickReplies(PROACTIVE_QUICK_REPLIES);
   }
-
-  setTimeout(triggerProactiveGreeting, 5000);
 
   launcher.addEventListener("click", () => {
     if (!opened) {

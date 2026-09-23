@@ -21,9 +21,20 @@ export const chatRouter = Router();
 const sessions = new Map<string, ChatSession>();
 
 chatRouter.post("/session", async (req, res) => {
-  const sessionId = randomUUID();
-  const { customerId, productHandle } = req.body as { customerId?: string; productHandle?: string };
-  const session: ChatSession = { sessionId, customerId: customerId ?? "unknown", history: [] };
+  const { customerId, productHandle, sessionId: existingSessionId } = req.body as {
+    customerId?: string;
+    productHandle?: string;
+    sessionId?: string;
+  };
+
+  // A real storefront reloads the whole page on navigation, wiping the
+  // widget's in-memory state — the browser resends the sessionId it saved
+  // from last time so the conversation resumes instead of restarting.
+  let session = existingSessionId ? sessions.get(existingSessionId) : undefined;
+  if (!session) {
+    session = { sessionId: randomUUID(), customerId: customerId ?? "unknown", history: [] };
+    sessions.set(session.sessionId, session);
+  }
 
   if (productHandle) {
     const product = await getProductByHandle(productHandle);
@@ -32,8 +43,7 @@ chatRouter.post("/session", async (req, res) => {
     }
   }
 
-  sessions.set(sessionId, session);
-  res.json({ sessionId, product: session.currentProduct ?? null });
+  res.json({ sessionId: session.sessionId, product: session.currentProduct ?? null, history: session.history });
 });
 
 chatRouter.post("/message", async (req, res) => {
