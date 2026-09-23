@@ -33,7 +33,7 @@ chatRouter.post("/session", async (req, res) => {
   }
 
   sessions.set(sessionId, session);
-  res.json({ sessionId });
+  res.json({ sessionId, product: session.currentProduct ?? null });
 });
 
 chatRouter.post("/message", async (req, res) => {

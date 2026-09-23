@@ -81,20 +81,42 @@ function renderQuickReplies(replies) {
   }
 }
 
-async function ensureSession() {
-  if (sessionId) return sessionId;
-  const params = new URLSearchParams(window.location.search);
-  const customerId = params.get("customer") ?? "demo-customer";
-  const productHandle = document.querySelector(".product")?.dataset.productHandle;
-  const res = await fetch("/api/chat/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customerId, productHandle }),
-  });
-  const data = await res.json();
-  sessionId = data.sessionId;
-  return sessionId;
+function renderPageProduct(product) {
+  if (!product) return;
+  const priceEl = document.getElementById("page-price");
+  const titleEl = document.getElementById("page-title");
+  if (priceEl) priceEl.textContent = product.priceRange;
+  if (titleEl) titleEl.textContent = product.title;
 }
+
+let sessionPromise = null;
+
+// Cached as an in-flight promise (not just the resolved id) so the eager
+// call below and any interaction-triggered call share one session instead
+// of racing to create two.
+function ensureSession() {
+  if (!sessionPromise) {
+    sessionPromise = (async () => {
+      const params = new URLSearchParams(window.location.search);
+      const customerId = params.get("customer") ?? "demo-customer";
+      const productHandle = document.querySelector(".product")?.dataset.productHandle;
+      const res = await fetch("/api/chat/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerId, productHandle }),
+      });
+      const data = await res.json();
+      sessionId = data.sessionId;
+      renderPageProduct(data.product);
+      return sessionId;
+    })();
+  }
+  return sessionPromise;
+}
+
+// Resolve the real price/title as soon as the page loads, not just once the
+// customer opens chat — otherwise the page would show a stale placeholder.
+ensureSession();
 
 async function sendMessage(message) {
   if (!opened) openChat();

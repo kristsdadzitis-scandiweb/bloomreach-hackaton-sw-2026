@@ -222,12 +222,67 @@ interface CustomerLoginData {
 
 const CUSTOMER_PROFILE_QUERY = `
   query CustomerProfile($customerAccessToken: String!) {
-    customer(customerAccessToken: $customerAccessToken) { firstName lastName email }
+    customer(customerAccessToken: $customerAccessToken) {
+      firstName
+      lastName
+      email
+      defaultAddress { id }
+    }
   }
 `;
 
 interface CustomerProfileData {
-  customer: { firstName: string; lastName: string; email: string } | null;
+  customer: { firstName: string; lastName: string; email: string; defaultAddress: { id: string } | null } | null;
+}
+
+const CREATE_CUSTOMER_ADDRESS_MUTATION = `
+  mutation CreateCustomerAddress($customerAccessToken: String!, $address: MailingAddressInput!) {
+    customerAddressCreate(customerAccessToken: $customerAccessToken, address: $address) {
+      customerAddress { id }
+      customerUserErrors { field message }
+    }
+  }
+`;
+
+interface CreateCustomerAddressData {
+  customerAddressCreate: {
+    customerAddress: { id: string } | null;
+    customerUserErrors: Array<{ field: string[]; message: string }>;
+  };
+}
+
+const SET_DEFAULT_ADDRESS_MUTATION = `
+  mutation SetDefaultAddress($customerAccessToken: String!, $addressId: ID!) {
+    customerDefaultAddressUpdate(customerAccessToken: $customerAccessToken, addressId: $addressId) {
+      customerUserErrors { field message }
+    }
+  }
+`;
+
+/**
+ * Checkout ignores the cart's own delivery.addresses once a real customer is
+ * attached — it looks at that customer's saved address book instead. So the
+ * demo customer needs an actual saved address, not just a cart-level one, or
+ * checkout shows a blank "add address" form despite being "logged in".
+ */
+async function ensureDemoCustomerAddress(customerAccessToken: string): Promise<void> {
+  const createData = await storefrontRequest<CreateCustomerAddressData>(CREATE_CUSTOMER_ADDRESS_MUTATION, {
+    customerAccessToken,
+    address: {
+      firstName: DEMO_DELIVERY_ADDRESS.firstName,
+      lastName: DEMO_DELIVERY_ADDRESS.lastName,
+      address1: DEMO_DELIVERY_ADDRESS.address1,
+      city: DEMO_DELIVERY_ADDRESS.city,
+      province: "Texas",
+      zip: DEMO_DELIVERY_ADDRESS.zip,
+      country: "United States",
+      phone: DEMO_DELIVERY_ADDRESS.phone,
+    },
+  });
+  const addressId = createData.customerAddressCreate.customerAddress?.id;
+  if (!addressId) return;
+
+  await storefrontRequest(SET_DEFAULT_ADDRESS_MUTATION, { customerAccessToken, addressId });
 }
 
 export interface CustomerProfile {
@@ -258,7 +313,12 @@ export async function loginDemoCustomer(): Promise<CustomerProfile> {
     throw new Error("Demo customer login failed: no profile returned");
   }
 
-  return { accessToken: customerAccessToken.accessToken, ...profileData.customer };
+  if (!profileData.customer.defaultAddress) {
+    await ensureDemoCustomerAddress(customerAccessToken.accessToken);
+  }
+
+  const { firstName, lastName, email } = profileData.customer;
+  return { accessToken: customerAccessToken.accessToken, firstName, lastName, email };
 }
 
 const CREATE_CART_MUTATION = `
