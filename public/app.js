@@ -81,7 +81,10 @@ function renderQuickReplies(replies) {
   }
 }
 
+let pageProduct = null;
+
 function renderPageProduct(product) {
+  pageProduct = product;
   if (!product) return;
   const priceEl = document.getElementById("page-price");
   const titleEl = document.getElementById("page-title");
@@ -227,8 +230,12 @@ launcher.addEventListener("click", () => {
 });
 closeBtn.addEventListener("click", closeChat);
 
-pageBuyBtn.addEventListener("click", () => {
-  sendMessage("I just added The Complete Snowboard to my cart — anything that goes well with it?");
+pageBuyBtn.addEventListener("click", async () => {
+  await ensureSession();
+  if (pageProduct?.variantId) {
+    await addProductToCart(pageProduct, pageBuyBtn);
+  }
+  sendMessage(`I just added ${pageProduct?.title ?? "this"} to my cart — anything that goes well with it?`);
 });
 
 form.addEventListener("submit", async (e) => {

@@ -29,6 +29,8 @@ export interface ProductPageContext {
   title: string;
   priceRange: string;
   available: boolean;
+  /** So the page's own "Add to cart" button can add this exact variant. */
+  variantId: string;
 }
 
 /** The cart the agent hands off for checkout. */
