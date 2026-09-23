@@ -43,8 +43,8 @@ async function storefrontRequest<T>(query: string, variables: Record<string, unk
 }
 
 const SEARCH_PRODUCTS_QUERY = `
-  query SearchProducts($query: String!, $first: Int!, $sortKey: ProductSortKeys!) {
-    products(query: $query, first: $first, sortKey: $sortKey) {
+  query SearchProducts($query: String!, $first: Int!, $sortKey: ProductSortKeys!, $reverse: Boolean) {
+    products(query: $query, first: $first, sortKey: $sortKey, reverse: $reverse) {
       nodes {
         handle
         title
@@ -76,6 +76,14 @@ interface SearchProductsData {
 
 const BROAD_QUERY_TERMS = /bestsell|best.sell|popular|trending|featured|recommend/i;
 
+// Shopify's product search does plain keyword matching — "cheap"/"cheaper"
+// never appears in a product's own title/tags, so a query like "cheaper
+// snowboard" matches zero products verbatim. Strip the price-intent word out
+// and sort by real price instead of falling through to the unrelated
+// bestseller fallback.
+const CHEAP_TERMS = /\b(cheap(est|er)?|affordable|budget|inexpensive|low[\s-]?cost)\b/i;
+const EXPENSIVE_TERMS = /\b(expensive|priciest|pricier|premium|luxury|top[\s-]?end)\b/i;
+
 function toSummaries(nodes: SearchProductsData["products"]["nodes"]): ProductSummary[] {
   // Out-of-stock items can't be added to cart, so never surface them as an option.
   return nodes
@@ -105,6 +113,26 @@ async function bestSelling(): Promise<ProductSummary[]> {
   return toSummaries(data.products.nodes);
 }
 
+/** Real price order (ascending, or descending for "most expensive"-style asks). */
+async function byPrice(query: string, reverse: boolean): Promise<ProductSummary[]> {
+  const data = await storefrontRequest<SearchProductsData>(SEARCH_PRODUCTS_QUERY, {
+    query,
+    first: query ? 10 : 5,
+    sortKey: "PRICE",
+    reverse,
+  });
+  const nodes = data.products.nodes;
+  if (!query) return toSummaries(nodes);
+
+  // Sorting by PRICE loosens Shopify's own relevance filtering (e.g. a
+  // "snowboard" search under PRICE sort can leak in a Gift Card) — keep only
+  // results that actually match a real query word, falling back to the
+  // unfiltered list only if that leaves nothing.
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const onTopic = nodes.filter((n) => words.some((w) => n.title.toLowerCase().includes(w) || n.productType.toLowerCase().includes(w)));
+  return toSummaries((onTopic.length > 0 ? onTopic : nodes).slice(0, 5));
+}
+
 /** Ground a customer question in real catalog data. */
 export async function searchProducts(query: string): Promise<ProductSummary[]> {
   if (!config.shopify.storeDomain) {
@@ -113,6 +141,13 @@ export async function searchProducts(query: string): Promise<ProductSummary[]> {
 
   if (!query.trim() || BROAD_QUERY_TERMS.test(query)) {
     return bestSelling();
+  }
+
+  const isCheap = CHEAP_TERMS.test(query);
+  const isExpensive = EXPENSIVE_TERMS.test(query);
+  if (isCheap || isExpensive) {
+    const strippedQuery = query.replace(CHEAP_TERMS, "").replace(EXPENSIVE_TERMS, "").trim();
+    return byPrice(strippedQuery, isExpensive);
   }
 
   const data = await storefrontRequest<SearchProductsData>(SEARCH_PRODUCTS_QUERY, {
