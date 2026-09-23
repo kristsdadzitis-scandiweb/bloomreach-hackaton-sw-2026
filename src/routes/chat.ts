@@ -8,7 +8,7 @@ import {
   loginDemoCustomer,
   updateCartBuyerIdentity,
 } from "../integrations/shopify.js";
-import { recordOrderEvent } from "../integrations/bloomreach.js";
+import { recordCartUpdateEvent } from "../integrations/bloomreach.js";
 import type { ChatSession } from "../types.js";
 
 /**
@@ -65,9 +65,10 @@ chatRouter.post("/checkout", async (req, res) => {
   const cart = await addToCart(session.cartId, lineItems, session.customerAccessToken);
   session.cartId = cart.cartId;
 
-  // Loop closure is triggered for real once Shopify's order webhook fires;
-  // stubbed here so the full loop is visible end to end in local dev.
-  await recordOrderEvent(session.customerId, "mock-order-id");
+  // A genuine "purchase" event needs a Shopify order webhook, which needs
+  // protected-customer-data approval this app doesn't have (see bloomreach.ts).
+  // Track the real, verifiable signal we do have instead: the cart itself.
+  await recordCartUpdateEvent(session.customerId, cart);
 
   res.json(cart);
 });
