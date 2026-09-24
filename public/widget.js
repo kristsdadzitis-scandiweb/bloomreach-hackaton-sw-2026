@@ -595,6 +595,15 @@
       if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
       return;
     }
+    // Any other error status (500 from a Gemini failure, 504 from a genuine
+    // timeout, etc.) has the same shape problem as 404 — no `reply` field —
+    // and the same fix: don't treat it as a real turn. A background check
+    // failing is nothing to show; a forced one (the launcher click) still
+    // deserves an honest response instead of silence.
+    if (!res.ok) {
+      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
+      return;
+    }
     const data = await res.json();
     hasHistory = true;
     openChat();

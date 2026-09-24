@@ -28,19 +28,66 @@ interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
 }
 
-async function generateContent(body: Record<string, unknown>): Promise<GeminiResponse> {
+// Observed a genuine, successful (non-retried) call take ~24s under real
+// Gemini load today — 20s would have aborted a call that was about to
+// succeed. 45s still leaves comfortable room for several calls plus a retry
+// within Cloud Run's 300s request limit, while still recovering from a truly
+// stuck connection well before that limit.
+const GEMINI_CALL_TIMEOUT_MS = 45_000;
+
+/**
+ * Without an explicit timeout, a stalled Gemini call hangs until Cloud Run's
+ * own 300s request timeout kills it — and since runMiaTurn serializes every
+ * turn per session (runExclusive), one stuck call jams every later request
+ * for that session behind it, each also burning a full 5 minutes before
+ * dying. Confirmed live: a real burst of "maximum request timeout" errors on
+ * /signal-check, all traced back to this. Failing fast here lets the lock
+ * queue keep moving and gives the caller a real error instead of a hang.
+ */
+async function generateContentOnce(body: Record<string, unknown>): Promise<GeminiResponse> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.google.geminiModel}:generateContent?key=${config.google.geminiApiKey}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new Error(`Gemini API call timed out after ${GEMINI_CALL_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  }
 
   const data = await res.json();
   if (!res.ok) {
     throw new Error(`Gemini API error: ${JSON.stringify(data)}`);
   }
   return data as GeminiResponse;
+}
+
+/**
+ * Confirmed live: Gemini genuinely returns transient failures under real
+ * load — a clean 503 ("This model is currently experiencing high demand...
+ * Please try again later" — literally its own advice) and, separately, a raw
+ * `TypeError: fetch failed` network error. Both are real, temporary,
+ * upstream conditions, not bugs in this code, and both usually clear within
+ * a second or two — one retry is cheap insurance against surfacing a broken
+ * turn (or an empty chat panel) for something that would have worked a
+ * moment later.
+ */
+async function generateContent(body: Record<string, unknown>): Promise<GeminiResponse> {
+  try {
+    return await generateContentOnce(body);
+  } catch (err) {
+    const isTransient =
+      err instanceof TypeError || (err instanceof Error && /"code":503|UNAVAILABLE|timed out/.test(err.message));
+    if (!isTransient) throw err;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return generateContentOnce(body);
+  }
 }
 
 // --- Tool declarations (the six from the playbook) ---
