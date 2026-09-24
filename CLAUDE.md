@@ -231,3 +231,53 @@ above — the app has no Databricks wiring at all yet).
 Also no MCP layer — plain REST from `src/integrations/gemini.ts`:
 `POST https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`.
 `GEMINI_API_KEY`/`GEMINI_MODEL` from `.env`, nothing to refresh or re-authenticate.
+
+# Known Shopify platform limitations on this store (not bugs to keep re-discovering)
+
+These were each investigated and confirmed as real platform constraints, not
+misconfiguration — don't spend time re-diagnosing them if they come up again.
+
+- **No real one-click/embedded checkout.** PayPal, Shop Pay, Google Pay etc. all need a
+  verified real business account to activate on a store, which a hackathon dev store
+  can't get. Confirmed by the user trying to actually connect PayPal and hitting the
+  verification wall directly. Checkout stays a redirect to the real Shopify checkout
+  page; don't propose embedding a payment sheet without a way around this.
+- **Multipass isn't available.** Settings → Customer accounts has no Multipass option
+  because this store uses Shopify's new Customer Accounts system (account URLs look like
+  `shopify.com/<id>/account`), which doesn't support the legacy Multipass feature at all.
+  Not a plan/permission gap — a hard incompatibility. Relevant if a future session
+  revisits "can we log a real shopper in automatically."
+- **`cartBuyerIdentityUpdate`'s `customerAccessToken` does not reliably drive checkout
+  address autofill** — a documented Shopify Developer Community bug, not something wrong
+  in this app's code. The actual fix (already implemented, `ensureDemoCustomerAddress` /
+  `attachDemoDeliveryAddress` in `shopify.ts`) is giving the demo customer a real saved
+  address on their account (`customerAddressCreate` + `customerDefaultAddressUpdate`),
+  not just an ad-hoc cart-level `delivery.addresses`. If checkout ever shows blank
+  address fields for a "logged in" cart again, check the customer's saved address book
+  first, don't just re-attach `buyerIdentity` and assume that alone will fix it.
+- **Order webhooks and direct Customer-object reads both need protected-customer-data
+  approval** this app doesn't have (already covered under Bloomreach access above — this
+  is the same underlying gate, just noting it applies to *any* future feature that wants
+  real order-confirmation or customer PII from the Admin/webhook side, not just the
+  Bloomreach purchase-event case it was first found for).
+- **Online Store 2.0 themes (at least Horizon) apply a CSS `transform` to `<body>`** for
+  page-transition animations, which silently makes `<body>` the containing block for any
+  descendant `position: fixed` element instead of the real viewport — breaks a naively
+  built fixed-position widget/overlay. Fix used in `widget.js`: append the widget's root
+  element to `document.documentElement` instead of `document.body`, and put `!important`
+  on the positioning properties. Worth remembering for any *other* fixed-position UI
+  added to a theme later, not just this widget.
+- **A visible bar covering the bottom of the page in theme preview isn't necessarily a
+  bug** — it can be Shopify's own staff/admin preview toolbar (tied to the logged-in
+  staff session on an unpublished/preview theme), which is outside any app or theme
+  code's control. Confirmed by it persisting even on the canonical published store URL
+  while the same staff member was logged in. If this comes up again: check in an
+  incognito/private window before concluding the widget or theme layout is broken.
+
+# Local dev gotcha
+
+Restarting the dev server with `pkill ... ; (nohup npm run dev ...)` in the *same* bash
+call frequently reports an ambiguous "Exit code 144" even when the server actually starts
+fine. Don't treat that exit code as a real failure — `curl http://localhost:8080/healthz`
+to check the truth, and if it's down, just retry the bare `(nohup npm run dev > ... &)`
+on its own (no `pkill` in the same call) rather than debugging the exit code itself.
