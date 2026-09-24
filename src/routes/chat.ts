@@ -58,21 +58,48 @@ function settleIdentityAfterTurn(session: ChatSession): void {
   }
 }
 
-async function runMiaTurn(session: ChatSession, latestMessage: string | undefined): Promise<MiaTurnResult> {
-  // complete_the_kit needs real pairs_with data from a catalog lookup, which
-  // this layer doesn't have yet — deferred; Tier 1's other four triggers
-  // don't depend on it, and this is a documented scoping call, not a silent gap.
-  const signalCase = evaluateSignalCase(session, []);
-  const result = await chatWithMia(session, latestMessage, signalCase);
+/**
+ * Serializes turns per session. Without this, two overlapping /signal-check
+ * calls for the same session (the background poll and an event-triggered
+ * recheck both landing while a prior Gemini round-trip is still in flight)
+ * both read `triggersFiredThisSession` before either has updated it — both
+ * see the trigger as unfired, both genuinely fire, and the shopper gets the
+ * same trigger's message twice or three times over. Marking a trigger fired
+ * only happens after the whole turn resolves, so the fix is to never let two
+ * turns for the same session actually run concurrently in the first place.
+ */
+const turnLocks = new Map<string, Promise<unknown>>();
 
-  if (result.response.writeBack?.event) {
-    await recordEvent(session.customerId, result.response.writeBack.event, result.response.writeBack.properties).catch(() => {});
-  }
-  if (signalCase.trigger !== "hold_back") {
-    session.behavior.triggersFiredThisSession.push(signalCase.trigger);
-  }
-  settleIdentityAfterTurn(session);
-  return result;
+function runExclusive<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  const prior = turnLocks.get(sessionId) ?? Promise.resolve();
+  const settled = prior.then(fn, fn);
+  turnLocks.set(
+    sessionId,
+    settled.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return settled;
+}
+
+async function runMiaTurn(session: ChatSession, latestMessage: string | undefined): Promise<MiaTurnResult> {
+  return runExclusive(session.sessionId, async () => {
+    // complete_the_kit needs real pairs_with data from a catalog lookup, which
+    // this layer doesn't have yet — deferred; Tier 1's other four triggers
+    // don't depend on it, and this is a documented scoping call, not a silent gap.
+    const signalCase = evaluateSignalCase(session, []);
+    const result = await chatWithMia(session, latestMessage, signalCase);
+
+    if (result.response.writeBack?.event) {
+      await recordEvent(session.customerId, result.response.writeBack.event, result.response.writeBack.properties).catch(() => {});
+    }
+    if (signalCase.trigger !== "hold_back") {
+      session.behavior.triggersFiredThisSession.push(signalCase.firedKey);
+    }
+    settleIdentityAfterTurn(session);
+    return result;
+  });
 }
 
 chatRouter.post("/session", asyncHandler(async (req, res) => {

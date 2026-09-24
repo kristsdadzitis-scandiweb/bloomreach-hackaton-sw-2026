@@ -510,8 +510,29 @@
   // background poll. A background poll must never interrupt an open panel;
   // a deliberate open has nothing to interrupt and should never come back
   // empty, even if the backend has no proactive trigger to fire on.
+  //
+  // The background poll (every ~9s) and an event-triggered recheck (fired
+  // right after a size-guide interaction) can otherwise both be in flight for
+  // the same session at once. The server now serializes turns per session so
+  // a race can't make the same trigger fire twice, but there's no reason to
+  // even send the redundant second request — piggyback on whichever check is
+  // already running instead of starting a new one.
+  let signalCheckInFlight = null;
   async function checkSignal(force) {
     if (!sessionId || (!force && opened)) return;
+    if (signalCheckInFlight) {
+      await signalCheckInFlight;
+      return;
+    }
+    signalCheckInFlight = performSignalCheck(force);
+    try {
+      await signalCheckInFlight;
+    } finally {
+      signalCheckInFlight = null;
+    }
+  }
+
+  async function performSignalCheck(force) {
     let res;
     try {
       res = await fetch(api("/api/chat/signal-check"), {

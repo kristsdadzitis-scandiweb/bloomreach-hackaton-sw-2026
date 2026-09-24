@@ -16,6 +16,17 @@ export type TierOneTrigger =
 
 export interface SignalCase {
   trigger: TierOneTrigger;
+  /**
+   * What the caller should record into `triggersFiredThisSession` once this
+   * turn actually speaks. Per-entity triggers (size_guide_reopened,
+   * availability_block) key this by product/SKU so reopening the guide for a
+   * *different* product can still fire — the bare trigger name alone would
+   * either never re-suppress (if never recorded) or wrongly block every
+   * other product forever (if recorded bare). Equal to `trigger` for
+   * triggers that are inherently session-wide (cart_left_behind,
+   * complete_the_kit, hold_back).
+   */
+  firedKey: string;
   evidence: string[];
   alsoTrue: string[];
   computedIn: string;
@@ -28,6 +39,7 @@ const SIZE_GUIDE_REOPEN_THRESHOLD = 2;
 function holdBack(alsoTrue: string[], quietRulesInForce: string[]): SignalCase {
   return {
     trigger: "hold_back",
+    firedKey: "hold_back",
     evidence: ["no Tier 1 condition cleanly fired this check"],
     alsoTrue,
     computedIn: "server:evaluateSignalCase",
@@ -57,9 +69,11 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
     reopenCounts.set(open.productId, (reopenCounts.get(open.productId) ?? 0) + 1);
   }
   for (const [productId, count] of reopenCounts) {
-    if (count >= SIZE_GUIDE_REOPEN_THRESHOLD && !alreadyFired.has(`size_guide_reopened:${productId}`)) {
+    const firedKey = `size_guide_reopened:${productId}`;
+    if (count >= SIZE_GUIDE_REOPEN_THRESHOLD && !alreadyFired.has(firedKey)) {
       return {
         trigger: "size_guide_reopened",
+        firedKey,
         evidence: [`size guide for ${productId} opened ${count} times`, "no add-to-cart for it yet"],
         alsoTrue,
         computedIn: "server:evaluateSignalCase",
@@ -70,15 +84,19 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
   if (reopenCounts.size > 0) alsoTrue.push("a size guide was opened, but not enough times yet to fire");
 
   // 2. Availability block: a viewed size was out of stock, not yet acted on.
-  if (behavior.lastUnavailableSizeView && !alreadyFired.has(`availability_block:${behavior.lastUnavailableSizeView.sku}`)) {
+  if (behavior.lastUnavailableSizeView) {
     const { sku, size } = behavior.lastUnavailableSizeView;
-    return {
-      trigger: "availability_block",
-      evidence: [`viewed ${sku} in size ${size}, which has zero stock`],
-      alsoTrue,
-      computedIn: "server:evaluateSignalCase",
-      quietRulesInForce,
-    };
+    const firedKey = `availability_block:${sku}`;
+    if (!alreadyFired.has(firedKey)) {
+      return {
+        trigger: "availability_block",
+        firedKey,
+        evidence: [`viewed ${sku} in size ${size}, which has zero stock`],
+        alsoTrue,
+        computedIn: "server:evaluateSignalCase",
+        quietRulesInForce,
+      };
+    }
   }
 
   // 3. Cart left behind: cart non-empty, idle past the threshold, checkout not started.
@@ -87,6 +105,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
     if (idleMs >= CART_IDLE_MS && !alreadyFired.has("cart_left_behind")) {
       return {
         trigger: "cart_left_behind",
+        firedKey: "cart_left_behind",
         evidence: [`cart last modified ${Math.round(idleMs / 1000)}s ago`, "checkout not started"],
         alsoTrue,
         computedIn: "server:evaluateSignalCase",
@@ -103,6 +122,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
   if (unmatchedPairsWith.length > 0 && !behavior.opportunityUsedThisSession && !alreadyFired.has("complete_the_kit")) {
     return {
       trigger: "complete_the_kit",
+      firedKey: "complete_the_kit",
       evidence: [`cart item pairs with ${unmatchedPairsWith.join(", ")}, not yet in cart`],
       alsoTrue,
       computedIn: "server:evaluateSignalCase",
