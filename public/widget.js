@@ -24,9 +24,30 @@
     return `${backendUrl}${path}`;
   }
 
+  /**
+   * Identity in this app is genuinely just "whichever customerId this browser
+   * presents" — there's no separate Bloomreach login, per CLAUDE.md. That
+   * makes a real named demo persona (e.g. Anna K., seeded with real Bloomreach
+   * properties at customerId "anna-k") normally unreachable from a fresh
+   * browser, since a fresh visitor always gets a random generated id. A
+   * `?ctb_customer=<id>` query param lets a demo/test session deliberately
+   * pick which cookie to present, persisted the same way a real one would be
+   * so it survives subsequent page loads without repeating the param. Not a
+   * fake "log in as" feature — it just sets which real customerId this
+   * browser is, exactly like the random id it would otherwise generate.
+   */
   function anonymousId() {
     try {
       const key = "chat-to-buy-visitor-id";
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("ctb_customer")) {
+        const requested = params.get("ctb_customer");
+        if (requested) {
+          localStorage.setItem(key, requested);
+          return requested;
+        }
+        localStorage.removeItem(key);
+      }
       let id = localStorage.getItem(key);
       if (!id) {
         id = crypto.randomUUID();
@@ -270,13 +291,15 @@
 
   // Dwell time on a product page — one real behavioral signal the size-guide
   // and availability triggers don't need, but complete_the_kit/cart_left_behind
-  // reasoning benefits from knowing what the shopper actually looked at.
+  // and comparison_stall (grouped by category) reasoning benefits from knowing
+  // what the shopper actually looked at.
   const viewedProductId = currentProductHandle();
   const viewStartedAt = performance.now();
+  let viewedCategory; // filled in once ensureSession's /session response resolves
   if (viewedProductId) {
     window.addEventListener("pagehide", () => {
       const seconds = Math.round((performance.now() - viewStartedAt) / 1000);
-      sendEvent("product_view_end", { productId: viewedProductId, seconds });
+      sendEvent("product_view_end", { productId: viewedProductId, seconds, category: viewedCategory });
     });
   }
 
@@ -578,6 +601,7 @@
         }
         if (data.cart?.totalQuantity > 0) showCartBar(data.cart);
         renderSizeGuideAffordance(data.product);
+        viewedCategory = data.product?.category;
 
         if (data.history?.length) {
           hasHistory = true;

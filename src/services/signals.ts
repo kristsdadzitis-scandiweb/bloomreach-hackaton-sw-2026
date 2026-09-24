@@ -4,18 +4,22 @@ import type { ChatSession } from "../types.js";
  * The "a rule opens the question, the model decides" layer the playbook
  * describes. This never decides whether to actually speak — that's Gemini's
  * job, given this as input. It only proposes what's evidently true about the
- * session right now, Tier 1 only (Tier 2/3 are out of scope for this build).
+ * session right now. Tier 1 (all 5 below through complete_the_kit) is fully
+ * built; comparison_stall is the first Tier 2 ("build if time") trigger from
+ * the colleague's Trigger Screens artifact — the rest of Tier 2, and all of
+ * Tier 3 (explicitly "design only" in that artifact), are not implemented.
  */
 
-export type TierOneTrigger =
+export type Trigger =
   | "size_guide_reopened"
   | "availability_block"
   | "cart_left_behind"
   | "complete_the_kit"
+  | "comparison_stall"
   | "hold_back";
 
 export interface SignalCase {
-  trigger: TierOneTrigger;
+  trigger: Trigger;
   /**
    * What the caller should record into `triggersFiredThisSession` once this
    * turn actually speaks. Per-entity triggers (size_guide_reopened,
@@ -35,6 +39,8 @@ export interface SignalCase {
 
 const CART_IDLE_MS = 90_000;
 const SIZE_GUIDE_REOPEN_THRESHOLD = 2;
+const COMPARISON_STALL_WINDOW_MS = 10 * 60_000;
+const COMPARISON_STALL_MIN_PRODUCTS = 3;
 
 function holdBack(alsoTrue: string[], quietRulesInForce: string[]): SignalCase {
   return {
@@ -136,6 +142,39 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
   if (behavior.opportunityUsedThisSession) {
     quietRulesInForce.push("opportunity already used this session — at most one per session");
   }
+
+  // 5. Comparison stall (Tier 2): three or more distinct products in the same
+  // category viewed within a 10-minute window, cart still empty — undecided,
+  // not blocked. Lower priority than every Tier 1 trigger above: a genuine
+  // blocker or a post-commitment opportunity should always dominate a softer
+  // "still deciding" reading.
+  const byCategory = new Map<string, Set<string>>();
+  const now = Date.now();
+  for (const [productId, stat] of Object.entries(behavior.productsViewed)) {
+    if (!stat.category) continue;
+    if (now - new Date(stat.lastViewedAt).getTime() > COMPARISON_STALL_WINDOW_MS) continue;
+    const seen = byCategory.get(stat.category) ?? new Set<string>();
+    seen.add(productId);
+    byCategory.set(stat.category, seen);
+  }
+  for (const [category, ids] of byCategory) {
+    const firedKey = `comparison_stall:${category}`;
+    if (ids.size >= COMPARISON_STALL_MIN_PRODUCTS && !session.cartId && !alreadyFired.has(firedKey)) {
+      return {
+        trigger: "comparison_stall",
+        firedKey,
+        evidence: [
+          `${ids.size} distinct ${category} products viewed within 10 minutes: ${[...ids].join(", ")}`,
+          "cart is still empty — undecided, not blocked",
+          "ask which of price, weight or waterproofing matters most, never guess the criterion",
+        ],
+        alsoTrue,
+        computedIn: "server:evaluateSignalCase",
+        quietRulesInForce,
+      };
+    }
+  }
+  if (byCategory.size > 0) alsoTrue.push("multiple products viewed in a category, but not enough yet (or a trigger above already fired) for comparison_stall");
 
   return holdBack(alsoTrue, quietRulesInForce);
 }

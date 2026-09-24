@@ -34,6 +34,8 @@ export interface ProductViewStat {
   views: number;
   totalSeconds: number;
   lastViewedAt: string;
+  /** The product's own category at view time — comparison_stall groups by this, not just by product id. */
+  category?: string;
 }
 
 export interface SizeGuideOpen {

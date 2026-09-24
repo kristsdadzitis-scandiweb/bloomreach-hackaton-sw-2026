@@ -222,6 +222,7 @@ chatRouter.post("/event", asyncHandler(async (req, res) => {
     case "product_view_end": {
       const productId = String(props.productId ?? "");
       const seconds = Number(props.seconds ?? 0);
+      const category = props.category ? String(props.category) : undefined;
       if (productId) {
         const existing = behavior.productsViewed[productId] ?? { productId, views: 0, totalSeconds: 0, lastViewedAt: "" };
         behavior.productsViewed[productId] = {
@@ -229,6 +230,7 @@ chatRouter.post("/event", asyncHandler(async (req, res) => {
           views: existing.views + 1,
           totalSeconds: existing.totalSeconds + seconds,
           lastViewedAt: new Date().toISOString(),
+          category: category ?? existing.category,
         };
       }
       break;
