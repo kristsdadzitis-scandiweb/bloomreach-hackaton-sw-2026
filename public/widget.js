@@ -222,6 +222,10 @@
   // instead of resetting on every page.
   const STORAGE_SESSION_KEY = "chat-to-buy-session-id";
   const STORAGE_OPEN_KEY = "chat-to-buy-was-open";
+  // How long a "the panel was open" flag stays honored across page loads —
+  // past this, treat it as left open from an old session rather than an
+  // active conversation still in progress.
+  const REOPEN_STALE_MS = 2 * 60_000;
   function getStoredSessionId() {
     try {
       return localStorage.getItem(STORAGE_SESSION_KEY);
@@ -627,7 +631,18 @@
             appendBubble(turn.role, turn.message);
             if (turn.products?.length) appendProductCards(turn.products);
           }
-          if (getStoredOpenState()) openChat();
+          // "Was open" has no expiry on its own — left open from a much
+          // earlier test/conversation, it would silently re-open on every
+          // later page and, worse, permanently block the background poll
+          // from ever firing again (checkSignal refuses to interrupt an
+          // open panel). Only honor it if the conversation is actually
+          // recent; a stale one starts closed instead, same as a fresh visit.
+          const lastTurnAt = new Date(data.history[data.history.length - 1].timestamp).getTime();
+          if (getStoredOpenState() && Date.now() - lastTurnAt < REOPEN_STALE_MS) {
+            openChat();
+          } else {
+            setStoredOpenState(false);
+          }
         }
         startSignalPolling();
 
