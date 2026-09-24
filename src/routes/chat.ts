@@ -90,9 +90,8 @@ async function runMiaTurn(session: ChatSession, latestMessage: string | undefine
     // query itself, since each line's product carries its own pairs_with
     // metafield; no separate per-item catalog lookup needed.
     const cart = session.cartId ? await getCart(session.cartId).catch(() => null) : null;
-    const unmatchedPairsWith = cart?.unmatchedPairsWith ?? [];
-    const signalCase = evaluateSignalCase(session, unmatchedPairsWith);
-    const result = await chatWithMia(session, latestMessage, signalCase, unmatchedPairsWith);
+    const signalCase = evaluateSignalCase(session, cart?.unmatchedPairsWith ?? []);
+    const result = await chatWithMia(session, latestMessage, signalCase, cart);
 
     if (result.response.writeBack?.event) {
       await recordEvent(session.customerId, result.response.writeBack.event, result.response.writeBack.properties).catch(() => {});

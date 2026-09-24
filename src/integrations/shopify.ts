@@ -491,6 +491,7 @@ const GET_CART_QUERY = `
     cart(id: $cartId) {
       checkoutUrl
       totalQuantity
+      cost { totalAmount { amount } }
       lines(first: 20) {
         nodes {
           merchandise {
@@ -513,6 +514,7 @@ interface GetCartData {
   cart: {
     checkoutUrl: string;
     totalQuantity: number;
+    cost: { totalAmount: { amount: string } };
     lines: {
       nodes: Array<{
         merchandise: {
@@ -529,6 +531,8 @@ interface GetCartData {
 export interface CartSnapshot {
   checkoutUrl: string;
   totalQuantity: number;
+  /** Real total, in the cart's own currency's minor-unit-free decimal amount — was hardcoded to 0 everywhere before, silently breaking the free-shipping offer check. */
+  totalAmount: number;
   /** Real product handles already in the cart — the complete_the_kit trigger's "not yet in cart" check. */
   lineHandles: string[];
   /**
@@ -568,7 +572,13 @@ export async function getCart(cartId: string): Promise<CartSnapshot | null> {
     ),
   ];
 
-  return { checkoutUrl: data.cart.checkoutUrl, totalQuantity: data.cart.totalQuantity, lineHandles, unmatchedPairsWith };
+  return {
+    checkoutUrl: data.cart.checkoutUrl,
+    totalQuantity: data.cart.totalQuantity,
+    totalAmount: Number(data.cart.cost.totalAmount.amount),
+    lineHandles,
+    unmatchedPairsWith,
+  };
 }
 
 // --- Mia / Northbound catalog tools ---

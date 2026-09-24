@@ -31,6 +31,15 @@ export interface SignalCase {
    * complete_the_kit, hold_back).
    */
   firedKey: string;
+  /**
+   * Real product handles this trigger's own reasoning needs, so the caller
+   * can pre-fetch them directly instead of relying on Gemini's tool-calling
+   * to go find them — the only reason a proactive (no customer message) turn
+   * needs the tool-calling phase at all. Populated for comparison_stall (the
+   * products actually being compared); empty for triggers already covered by
+   * session.currentProduct or their own pre-fetch (complete_the_kit).
+   */
+  relevantHandles: string[];
   evidence: string[];
   alsoTrue: string[];
   computedIn: string;
@@ -46,6 +55,7 @@ function holdBack(alsoTrue: string[], quietRulesInForce: string[]): SignalCase {
   return {
     trigger: "hold_back",
     firedKey: "hold_back",
+    relevantHandles: [],
     evidence: ["no Tier 1 condition cleanly fired this check"],
     alsoTrue,
     computedIn: "server:evaluateSignalCase",
@@ -81,6 +91,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
       return {
         trigger: "size_guide_reopened",
         firedKey,
+        relevantHandles: [productId],
         evidence: [`size guide for ${productId} opened ${count} times`, "no add-to-cart for it yet"],
         alsoTrue,
         computedIn: "server:evaluateSignalCase",
@@ -98,6 +109,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
       return {
         trigger: "availability_block",
         firedKey,
+        relevantHandles: [],
         evidence: [`viewed ${sku} in size ${size}, which has zero stock`],
         alsoTrue,
         computedIn: "server:evaluateSignalCase",
@@ -113,6 +125,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
       return {
         trigger: "cart_left_behind",
         firedKey: "cart_left_behind",
+        relevantHandles: [],
         evidence: [`cart last modified ${Math.round(idleMs / 1000)}s ago`, "checkout not started"],
         alsoTrue,
         computedIn: "server:evaluateSignalCase",
@@ -130,6 +143,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
     return {
       trigger: "complete_the_kit",
       firedKey: "complete_the_kit",
+      relevantHandles: [],
       evidence: [
         `cart item(s) ${unmatchedPairsWith.join(", ")} have a pairs_with complement not yet in the cart`,
         `call search_catalog with pairs_with:<that cart item's id> to find the real complement to recommend`,
@@ -163,6 +177,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
       return {
         trigger: "comparison_stall",
         firedKey,
+        relevantHandles: [...ids],
         evidence: [
           `${ids.size} distinct ${category} products viewed within 10 minutes: ${[...ids].join(", ")}`,
           "cart is still empty — undecided, not blocked",
