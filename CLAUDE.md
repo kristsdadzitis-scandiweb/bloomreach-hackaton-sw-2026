@@ -162,6 +162,15 @@ token alone isn't enough for the app to call the SQL Statement Execution API its
 
 # Northbound catalog (Mia demo)
 
+The old snowboard/Weird Fish catalog (22 products) was deleted via `productDelete` —
+Northbound replaces that demo, not runs alongside it. Only `gift-card` and
+`selling-plans-ski-wax` were left from the original seed (didn't match either
+`productType:"snowboard"` or `vendor:"Weird Fish"`, and weren't asked for) — delete
+those too if they ever show up in a `search_catalog` result by mistake, but they
+haven't so far. `the-minimal-snowboard` also survived on purpose: its `productType`
+is empty, not literally `"snowboard"`, so it didn't match the filter used — worth
+knowing if "no snowboards left" is ever asserted and it turns out one technically is.
+
 5 real products seeded via Admin API `productSet` in the same dev store, vendor
 `Northbound`, all with real Size options and deliberate stock gaps for the Tier 1
 triggers: `northbound-trailhead-rain-shell` (S/M/L/XL, **M=0** — drives size guide
@@ -266,6 +275,14 @@ above — the app has no Databricks wiring at all yet).
 Also no MCP layer — plain REST from `src/integrations/gemini.ts`:
 `POST https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`.
 `GEMINI_API_KEY`/`GEMINI_MODEL` from `.env`, nothing to refresh or re-authenticate.
+
+This same key can generate real images, not just text — confirmed live this session.
+`GET .../v1beta/models?key=...` lists `gemini-2.5-flash-image` (and newer `-preview`
+variants) among the available models; the same `generateContent` call returns an
+`inlineData` part (`{mimeType, data}`, base64 PNG) instead of/alongside `text` when
+prompted for an image. Used to generate the 5 Northbound product photos, then uploaded
+to Shopify via the standard `stagedUploadsCreate` → upload → `productCreateMedia` flow
+(not `productSet`'s own image field — that mutation doesn't take raw file bytes).
 
 # Known Shopify platform limitations on this store (not bugs to keep re-discovering)
 
