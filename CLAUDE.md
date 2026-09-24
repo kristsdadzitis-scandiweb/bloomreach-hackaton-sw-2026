@@ -196,7 +196,45 @@ each product to the `Online Store` publication (`gid://shopify/Publication/30183
 on this store — confirmed by checking which publication an existing visible product
 uses, don't assume the ID is stable across stores). If a newly-created product is
 invisible via Storefront API, check `resourcePublicationsCount` on it via Admin API
-before assuming anything else is wrong.
+before assuming anything else is wrong. **Also hit again after creating a product**:
+a brand-new product's `featuredImage` and a brand-new Bloomreach customer's properties
+can both briefly 404/null right after the write — not a bug, just async indexing;
+wait a few seconds and re-read before concluding something failed.
+
+## Trigger Screens — Tier 2 expansion (in progress)
+
+A colleague's second design artifact ("Trigger Screens", a Claude Artifact, not in this
+repo) specifies 18 total triggers: the 5 we already built are its own "Tier 1 · build
+and demo" set (confirms our scope was right). Tier 2 ("build if time") is 4 more:
+checkout stall, comparison stall, honest trade-up, functional essential. Tier 3 (8 more)
+is explicitly marked "design only" in that artifact — not being built, no catalog/data
+work planned for it unless asked. Going through Tier 2 one scenario at a time, adding
+only the real Shopify products and Bloomreach data each one actually needs — not yet
+wiring the trigger-detection logic itself (that's a separate, later pass per scenario).
+
+**Anna K.** — the artifact's own name for its "known identity" persona, reused verbatim
+rather than inventing a new one. A real, persistent Bloomreach customer at a **fixed**
+id, `anna-k` (not a throwaway per-test id like the rest of this session's curl tests
+used) — set once via `updateCustomerProfile`, meant to be reused across every future
+"known"/"mid-session" scenario rather than re-seeded each time. Current real profile:
+`firstName: "Anna"`, `usualSizeTop: "L"`, `topCategory: "jackets"`, `ordersCount: 1`,
+`lastOrderDate: "2026-08-02"`, `lastOrderItems: ["northbound-trailhead-rain-shell"]`,
+`segment: "returning_hiker"`, `consent: true`. To demo the "known" flow for real, use
+`customerId: "anna-k"` (e.g. set `localStorage["chat-to-buy-visitor-id"] = "anna-k"` in
+the browser before starting a session) — Bloomreach identity in this app is keyed by
+that cookie-like customerId, not by the separate Shopify demo-login account. Extend her
+profile as later scenarios need more (e.g. `usualSizeShoe`), don't create a second persona.
+
+**Comparison stall** (Tier 2, first one built): needed a real 3-way jacket comparison —
+previously only had one jacket (`northbound-trailhead-rain-shell`, 20k/420g/189).  Added:
+`northbound-pinnacle-shell` (28k/250g/279 EUR, SKUs `NB-PINNACLE-*`, real image, healthy
+stock all sizes — the "lighter and pricier" end) and `northbound-squall-wind-jacket`
+(water-repellent only/150g/89 EUR, SKUs `NB-SQUALL-*`, real image, healthy stock — the
+"cheap but doesn't hold up in real rain" end). Same creation flow as the original 5:
+`productSet` (with `sku` inline this time, not backfilled after) → `publishablePublish` →
+`metafieldsSet` for the `$app` fields → Gemini-generated image → `stagedUploadsCreate`/
+upload/`productCreateMedia`. Verified via the app's own `searchCatalog({category:"jacket"})`
+that all three now come back with correctly differentiated waterproof/weight/price.
 
 # Shopify access
 
