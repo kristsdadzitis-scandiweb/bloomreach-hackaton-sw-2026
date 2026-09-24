@@ -52,8 +52,9 @@ function holdBack(alsoTrue: string[], quietRulesInForce: string[]): SignalCase {
  * Always returns a populated SignalCase — hold_back is a real, logged
  * decision (with its own evidence/quiet-rules trail), never "nothing".
  *
- * `unmatchedPairsWith` is real catalog data (which of a cart item's
- * pairs_with complements aren't in the cart yet) — this layer has no
+ * `unmatchedPairsWith` is real catalog data: handles of cart items that
+ * themselves have a pairs_with complement missing from the cart (the same
+ * id search_catalog's own `pairs_with` filter expects) — this layer has no
  * Shopify access itself, so the caller resolves it before calling in.
  */
 export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: string[] = []): SignalCase {
@@ -123,7 +124,10 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
     return {
       trigger: "complete_the_kit",
       firedKey: "complete_the_kit",
-      evidence: [`cart item pairs with ${unmatchedPairsWith.join(", ")}, not yet in cart`],
+      evidence: [
+        `cart item(s) ${unmatchedPairsWith.join(", ")} have a pairs_with complement not yet in the cart`,
+        `call search_catalog with pairs_with:<that cart item's id> to find the real complement to recommend`,
+      ],
       alsoTrue,
       computedIn: "server:evaluateSignalCase",
       quietRulesInForce,

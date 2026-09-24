@@ -85,17 +85,23 @@ function runExclusive<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
 
 async function runMiaTurn(session: ChatSession, latestMessage: string | undefined): Promise<MiaTurnResult> {
   return runExclusive(session.sessionId, async () => {
-    // complete_the_kit needs real pairs_with data from a catalog lookup, which
-    // this layer doesn't have yet — deferred; Tier 1's other four triggers
-    // don't depend on it, and this is a documented scoping call, not a silent gap.
-    const signalCase = evaluateSignalCase(session, []);
-    const result = await chatWithMia(session, latestMessage, signalCase);
+    // complete_the_kit's real evidence — which of the cart's own pairs_with
+    // complements aren't in the cart yet — comes straight from the cart
+    // query itself, since each line's product carries its own pairs_with
+    // metafield; no separate per-item catalog lookup needed.
+    const cart = session.cartId ? await getCart(session.cartId).catch(() => null) : null;
+    const unmatchedPairsWith = cart?.unmatchedPairsWith ?? [];
+    const signalCase = evaluateSignalCase(session, unmatchedPairsWith);
+    const result = await chatWithMia(session, latestMessage, signalCase, unmatchedPairsWith);
 
     if (result.response.writeBack?.event) {
       await recordEvent(session.customerId, result.response.writeBack.event, result.response.writeBack.properties).catch(() => {});
     }
     if (signalCase.trigger !== "hold_back") {
       session.behavior.triggersFiredThisSession.push(signalCase.firedKey);
+    }
+    if (signalCase.trigger === "complete_the_kit") {
+      session.behavior.opportunityUsedThisSession = true;
     }
     settleIdentityAfterTurn(session);
     return result;

@@ -491,29 +491,84 @@ const GET_CART_QUERY = `
     cart(id: $cartId) {
       checkoutUrl
       totalQuantity
+      lines(first: 20) {
+        nodes {
+          merchandise {
+            ... on ProductVariant {
+              product {
+                handle
+                pairsWithMeta: metafield(namespace: "$app", key: "pairs_with") {
+                  references(first: 5) { nodes { ... on Product { handle } } }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 `;
 
 interface GetCartData {
-  cart: { checkoutUrl: string; totalQuantity: number } | null;
+  cart: {
+    checkoutUrl: string;
+    totalQuantity: number;
+    lines: {
+      nodes: Array<{
+        merchandise: {
+          product?: {
+            handle: string;
+            pairsWithMeta: { references: { nodes: Array<{ handle: string }> } } | null;
+          };
+        };
+      }>;
+    };
+  } | null;
 }
 
 export interface CartSnapshot {
   checkoutUrl: string;
   totalQuantity: number;
+  /** Real product handles already in the cart — the complete_the_kit trigger's "not yet in cart" check. */
+  lineHandles: string[];
+  /**
+   * Handles of cart items that themselves have a real pairs_with complement
+   * missing from the cart — i.e. exactly the id search_catalog's own
+   * `pairs_with` filter expects ("Product id to find real complements for
+   * that specific product"), not the missing complement's own handle. The
+   * model already knows how to turn this into the actual complement
+   * candidate via that tool; this only needs to say which cart item has one.
+   */
+  unmatchedPairsWith: string[];
 }
 
 /**
  * Re-fetches an existing cart's current state — used to restore the cart bar
- * after a page navigation. The cart itself lives on in Shopify regardless of
- * page reloads; only the widget's in-memory knowledge of it was ever lost.
+ * after a page navigation, and to compute the complete_the_kit trigger's
+ * real "cart item pairs with X, X isn't in the cart yet" evidence. The cart
+ * itself lives on in Shopify regardless of page reloads; only the widget's
+ * in-memory knowledge of it was ever lost.
  */
 export async function getCart(cartId: string): Promise<CartSnapshot | null> {
   if (!config.shopify.storeDomain) return null;
   const data = await storefrontRequest<GetCartData>(GET_CART_QUERY, { cartId });
   if (!data.cart) return null;
-  return { checkoutUrl: data.cart.checkoutUrl, totalQuantity: data.cart.totalQuantity };
+
+  const lineHandles = data.cart.lines.nodes.map((n) => n.merchandise.product?.handle).filter((h): h is string => Boolean(h));
+  const lineHandleSet = new Set(lineHandles);
+  const unmatchedPairsWith = [
+    ...new Set(
+      data.cart.lines.nodes
+        .filter((n) => {
+          const complements = n.merchandise.product?.pairsWithMeta?.references.nodes ?? [];
+          return complements.some((ref) => !lineHandleSet.has(ref.handle));
+        })
+        .map((n) => n.merchandise.product?.handle)
+        .filter((h): h is string => Boolean(h)),
+    ),
+  ];
+
+  return { checkoutUrl: data.cart.checkoutUrl, totalQuantity: data.cart.totalQuantity, lineHandles, unmatchedPairsWith };
 }
 
 // --- Mia / Northbound catalog tools ---

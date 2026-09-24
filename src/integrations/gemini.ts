@@ -397,7 +397,12 @@ export interface MiaTurnResult {
 }
 
 /** One turn of the Mia conversation. `latestMessage` is undefined for a proactive, signal-driven turn. */
-export async function chatWithMia(session: ChatSession, latestMessage: string | undefined, signalCase: SignalCase): Promise<MiaTurnResult> {
+export async function chatWithMia(
+  session: ChatSession,
+  latestMessage: string | undefined,
+  signalCase: SignalCase,
+  pairsWithAnchors: string[] = [],
+): Promise<MiaTurnResult> {
   if (!config.google.geminiApiKey) {
     const stub: MiaResponse = {
       decision: { action: "stay_closed", readAs: "stub mode, no Gemini key configured", confidence: "low", rejected: [], offer: { type: "none", why: "" } },
@@ -428,11 +433,29 @@ export async function chatWithMia(session: ChatSession, latestMessage: string | 
   // The current page's product is real, fresh ground truth too (fetched at
   // /session time this same page load) — fold it in so Mia can show/recommend
   // it without needing to re-search_catalog for the exact thing already on screen.
-  const candidates = toolResult.candidates.some((c) => c.id === session.currentProduct?.id)
+  let candidates = toolResult.candidates.some((c) => c.id === session.currentProduct?.id)
     ? toolResult.candidates
     : session.currentProduct
       ? [...toolResult.candidates, session.currentProduct]
       : toolResult.candidates;
+
+  // complete_the_kit's evidence names cart items with a real, unmet pairs_with
+  // complement — but a proactive signal-check has no customer message to give
+  // Phase A's tool loop a reason to go look them up itself, so the model
+  // otherwise (correctly, per its no-fabrication rule) declines to recommend
+  // something it has no real data for. Resolving it here guarantees Phase B
+  // always has the actual complement candidates, the same way session.currentProduct
+  // is guaranteed above, rather than depending on the model deciding to search.
+  if (pairsWithAnchors.length > 0) {
+    const known = new Set(candidates.map((c) => c.id));
+    const fetched = await Promise.all(pairsWithAnchors.map((handle) => searchCatalog({ pairsWith: handle }).catch(() => [])));
+    for (const complement of fetched.flat()) {
+      if (!known.has(complement.id)) {
+        known.add(complement.id);
+        candidates = [...candidates, complement];
+      }
+    }
+  }
 
   const contextBlock = buildContextBlock(session, signalCase, candidates);
   const response = await produceMiaResponse(contents, SYSTEM_PROMPT, contextBlock);
