@@ -242,12 +242,18 @@ gcloud run deploy chat-to-buy --source . --region europe-west1 --allow-unauthent
   --project qwiklabs-gcp-02-9567efd29b14 --env-vars-file <path>/cloudrun-env.yaml --quiet
 ```
 Cloud Run doesn't read `.env` — the `--env-vars-file` YAML has to be regenerated from it
-before every deploy (it's gitignored scratch, not checked in). A quick way:
+before every deploy (it's gitignored scratch, not checked in). **Must exclude `PORT`** —
+Cloud Run reserves it and rejects the whole deploy if it's included (`spec.template.spec.containers[0].env: ... reserved env names ... PORT`), hit for real when this snippet
+was written without the filter. A quick way:
 ```js
 node -e "
 const fs = require('fs');
 const lines = fs.readFileSync('.env', 'utf8').split('\n').filter(l => l.includes('=') && !l.startsWith('#'));
-const yaml = lines.map(l => { const i = l.indexOf('='); return l.slice(0, i) + ': ' + JSON.stringify(l.slice(i + 1)); }).join('\n');
+const yaml = lines
+  .map(l => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; })
+  .filter(([key, value]) => key !== 'PORT' && value !== '')
+  .map(([key, value]) => key + ': ' + JSON.stringify(value))
+  .join('\n');
 fs.writeFileSync('/path/to/scratchpad/cloudrun-env.yaml', yaml);
 "
 ```
