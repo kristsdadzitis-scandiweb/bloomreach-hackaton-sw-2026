@@ -166,48 +166,22 @@ export async function searchProducts(query: string): Promise<ProductSummary[]> {
   return results.length > 0 ? results : bestSelling();
 }
 
-const PRODUCT_BY_HANDLE_QUERY = `
-  query ProductByHandle($handle: String!) {
-    product(handle: $handle) {
-      handle
-      title
-      productType
-      availableForSale
-      featuredImage { url }
-      priceRange {
-        minVariantPrice { amount currencyCode }
-      }
-      variants(first: 1) {
-        nodes { id }
-      }
-    }
-  }
-`;
-
-interface ProductByHandleData {
-  product: SearchProductsData["products"]["nodes"][number] | null;
-}
-
 /**
  * Resolves the real product a customer is currently looking at, by page
- * handle — unlike search, this doesn't filter out an out-of-stock product,
- * since the bot still needs to know what page it's on to answer questions.
+ * handle, as a full MiaCandidate — sizes, stock, fit note, everything the
+ * size-guide UI and Mia's own page-context awareness need. Unlike search,
+ * this doesn't filter out an out-of-stock product, since the bot (and the
+ * size guide) still need to know what page it's on regardless of stock.
  */
-export async function getProductByHandle(handle: string): Promise<ProductSummary | null> {
+export async function getCandidateByHandle(handle: string): Promise<MiaCandidate | null> {
   if (!config.shopify.storeDomain) {
     return null;
   }
-  const data = await storefrontRequest<ProductByHandleData>(PRODUCT_BY_HANDLE_QUERY, { handle });
-  const node = data.product;
-  if (!node) return null;
-  return {
-    handle: node.handle,
-    title: node.title,
-    priceRange: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
-    available: node.availableForSale,
-    variantId: node.variants.nodes[0]?.id ?? "",
-    image: node.featuredImage?.url,
-  };
+  const data = await storefrontRequest<{ product: CatalogNode | null }>(
+    `query ProductByHandle($handle: String!) { product(handle: $handle) { ${CATALOG_NODE_FIELDS} } }`,
+    { handle },
+  );
+  return data.product ? toMiaCandidate(data.product) : null;
 }
 
 /** Real product types/categories in the catalog — used to keep suggestions grounded. */

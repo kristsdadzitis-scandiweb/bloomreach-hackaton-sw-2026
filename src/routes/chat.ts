@@ -4,8 +4,8 @@ import { chatWithMia, type MiaTurnResult } from "../integrations/gemini.js";
 import {
   addToCart,
   attachDemoDeliveryAddress,
+  getCandidateByHandle,
   getCart,
-  getProductByHandle,
   loginDemoCustomer,
   updateCartBuyerIdentity,
 } from "../integrations/shopify.js";
@@ -100,10 +100,11 @@ chatRouter.post("/session", asyncHandler(async (req, res) => {
   await resolveIdentity(session);
 
   if (productHandle) {
-    const product = await getProductByHandle(productHandle);
+    const product = await getCandidateByHandle(productHandle);
     if (product) {
       session.currentProduct = product;
       session.behavior.pageType = "pdp";
+      session.behavior.category = product.category;
     }
   }
 

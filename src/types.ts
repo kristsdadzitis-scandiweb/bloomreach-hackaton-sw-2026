@@ -90,22 +90,12 @@ export interface ChatSession {
   /** Set once the customer "logs in" (demo login toggle) — attached to their cart. */
   customerAccessToken?: string;
   customerName?: string;
-  /** The real product the customer's current page is showing, if any. */
-  currentProduct?: ProductPageContext;
+  /** The real product the customer's current page is showing, if any — full candidate shape so the size guide and Mia's own page-awareness have real sizes/stock/fit note to work with. */
+  currentProduct?: MiaCandidate;
   identityTier: IdentityTier;
   /** Populated from a real Bloomreach read — never fixture/fabricated data. */
   profile?: CustomerProfile;
   behavior: SessionBehavior;
-}
-
-export interface ProductPageContext {
-  handle: string;
-  title: string;
-  priceRange: string;
-  available: boolean;
-  /** So the page's own "Add to cart" button can add this exact variant. */
-  variantId: string;
-  image?: string;
 }
 
 /** The cart the agent hands off for checkout. */

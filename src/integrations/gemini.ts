@@ -311,6 +311,10 @@ function buildContextBlock(session: ChatSession, signalCase: SignalCase, candida
       device: session.behavior.device,
       pageType: session.behavior.pageType,
       category: session.behavior.category,
+      // The real product the customer's current page is showing, if any —
+      // resolve pronouns ("this", "it") to this without asking, per the
+      // playbook's own identity rules on using what you already know.
+      pageProduct: session.currentProduct ?? null,
       productsViewed: session.behavior.productsViewed,
       filters: session.behavior.filters,
       sort: session.behavior.sort,
@@ -420,11 +424,21 @@ export async function chatWithMia(session: ChatSession, latestMessage: string | 
   }
 
   const toolResult = await runMiaToolLoop(contents, SYSTEM_PROMPT, session);
-  const contextBlock = buildContextBlock(session, signalCase, toolResult.candidates);
+
+  // The current page's product is real, fresh ground truth too (fetched at
+  // /session time this same page load) — fold it in so Mia can show/recommend
+  // it without needing to re-search_catalog for the exact thing already on screen.
+  const candidates = toolResult.candidates.some((c) => c.id === session.currentProduct?.id)
+    ? toolResult.candidates
+    : session.currentProduct
+      ? [...toolResult.candidates, session.currentProduct]
+      : toolResult.candidates;
+
+  const contextBlock = buildContextBlock(session, signalCase, candidates);
   const response = await produceMiaResponse(contents, SYSTEM_PROMPT, contextBlock);
 
   const ground: GroundTruth = {
-    candidates: toolResult.candidates,
+    candidates,
     cartNonEmpty: toolResult.cartNonEmpty,
     cartValue: toolResult.cartValue,
     freeShippingThreshold: 99,

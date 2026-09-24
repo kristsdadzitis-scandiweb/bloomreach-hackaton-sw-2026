@@ -124,6 +124,20 @@
     #ctb-chat-form button[type="submit"] {
       padding: 8px 14px; border-radius: 8px; border: none; background: #1e3a2f; color: #fff; cursor: pointer;
     }
+    #ctb-size-guide-fab {
+      position: fixed !important; bottom: 90px !important; right: 20px !important; top: auto !important; left: auto !important;
+      background: #fff; color: #1e3a2f; border: 1px solid #1e3a2f; border-radius: 999px; padding: 8px 14px;
+      font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 2147482999 !important;
+    }
+    #ctb-size-guide-fab[hidden] { display: none; }
+    #ctb-size-guide-popover {
+      position: fixed !important; bottom: 130px !important; right: 20px !important; top: auto !important; left: auto !important;
+      width: 280px; max-width: calc(100vw - 40px); background: #fff; border-radius: 12px; padding: 14px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.25); z-index: 2147482999 !important; color: #1a1a1a;
+    }
+    #ctb-size-guide-popover[hidden] { display: none; }
+    #ctb-size-guide-popover .ctb-sg-title { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+    #ctb-size-guide-popover .ctb-sg-note { font-size: 12px; color: #555; margin-bottom: 10px; }
   `;
   document.head.appendChild(style);
 
@@ -131,6 +145,8 @@
   const root = document.createElement("div");
   root.id = "chat-to-buy-widget";
   root.innerHTML = `
+    <button id="ctb-size-guide-fab" hidden>📏 Size guide</button>
+    <div id="ctb-size-guide-popover" hidden></div>
     <button id="ctb-launcher" aria-label="Open chat">🏔️</button>
     <div id="ctb-panel" hidden>
       <div id="ctb-header">
@@ -167,6 +183,8 @@
   const cartBar = root.querySelector("#ctb-cart-bar");
   const cartCountEl = root.querySelector("#ctb-cart-count");
   const cartLink = root.querySelector("#ctb-cart-link");
+  const sizeGuideFab = root.querySelector("#ctb-size-guide-fab");
+  const sizeGuidePopover = root.querySelector("#ctb-size-guide-popover");
 
   let sessionId = null;
   let opened = false;
@@ -283,6 +301,61 @@
     if (product.insulation) return `Insulation: ${product.insulation}`;
     if (product.layer) return `Layer: ${product.layer}`;
     return "";
+  }
+
+  // A real, standalone size guide for the product page itself — separate
+  // from the chat panel entirely, so size_guide_reopened and
+  // availability_block can generate real evidence on a first visit, before
+  // the chat has ever been opened once.
+  function renderSizeGuideAffordance(product) {
+    const hasSizes = product && Object.keys(product.stockBySize || {}).length > 0;
+    if (!hasSizes) {
+      sizeGuideFab.hidden = true;
+      sizeGuidePopover.hidden = true;
+      return;
+    }
+
+    sizeGuideFab.hidden = false;
+    sizeGuideFab.onclick = () => {
+      const isOpen = !sizeGuidePopover.hidden;
+      if (isOpen) {
+        sizeGuidePopover.hidden = true;
+        return;
+      }
+      // Every open is a real reopen signal, not just the first — that's
+      // exactly what size_guide_reopened is watching for.
+      sendEvent("size_guide_opened", { productId: product.id });
+
+      sizeGuidePopover.innerHTML = `
+        <div class="ctb-sg-title">${product.name} — sizes</div>
+        ${product.fitNote ? `<p class="ctb-sg-note">${product.fitNote}</p>` : ""}
+      `;
+      const pillsWrap = document.createElement("div");
+      pillsWrap.className = "ctb-size-pills";
+      const stockLine = document.createElement("p");
+      stockLine.className = "ctb-stock-line";
+
+      for (const [size, stock] of Object.entries(product.stockBySize)) {
+        const pill = document.createElement("button");
+        pill.type = "button";
+        pill.className = "ctb-size-pill" + (stock === 0 ? " unavailable" : "");
+        pill.textContent = size;
+        pill.addEventListener("click", () => {
+          if (stock === 0) {
+            sendEvent("size_unavailable_viewed", { sku: product.sku, size });
+            stockLine.textContent = `${size} is out of stock right now.`;
+            return;
+          }
+          pillsWrap.querySelectorAll(".ctb-size-pill").forEach((el) => el.classList.remove("selected"));
+          pill.classList.add("selected");
+          stockLine.textContent = stock <= 3 ? `Only ${stock} left in ${size}` : `In stock in ${size}`;
+        });
+        pillsWrap.appendChild(pill);
+      }
+      sizeGuidePopover.appendChild(pillsWrap);
+      sizeGuidePopover.appendChild(stockLine);
+      sizeGuidePopover.hidden = false;
+    };
   }
 
   function appendProductCards(products) {
@@ -452,6 +525,7 @@
           headerTitle.textContent = `Hi, ${data.profile.firstName} 👋`;
         }
         if (data.cart?.totalQuantity > 0) showCartBar(data.cart);
+        renderSizeGuideAffordance(data.product);
 
         if (data.history?.length) {
           hasHistory = true;
