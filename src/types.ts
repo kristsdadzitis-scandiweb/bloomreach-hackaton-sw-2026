@@ -13,6 +13,74 @@ export interface ChatTurn {
   products?: ProductPageContext[];
 }
 
+export type IdentityTier = "anonymous" | "known" | "just_signed_in";
+
+/** A real Bloomreach customer property lookup, not fixture data. Absent fields are genuinely unknown. */
+export interface CustomerProfile {
+  firstName?: string;
+  usualSizeTop?: string;
+  usualSizeShoe?: string;
+  topCategory?: string;
+  ordersCount?: number;
+  lastOrderDate?: string;
+  lastOrderItems?: string[];
+  segment?: string;
+  consent?: boolean;
+  openSupportCase?: boolean;
+}
+
+export interface ProductViewStat {
+  productId: string;
+  views: number;
+  totalSeconds: number;
+  lastViewedAt: string;
+}
+
+export interface SizeGuideOpen {
+  productId: string;
+  openedAt: string;
+}
+
+export interface UnavailableSizeView {
+  sku: string;
+  size: string;
+  viewedAt: string;
+}
+
+export type CheckoutStep = "none" | "opened" | "abandoned";
+
+/** Raw behavioral signals the widget reports — the input evaluateSignalCase reasons over. */
+export interface SessionBehavior {
+  device: "mobile" | "desktop" | "unknown";
+  pageType: "home" | "category" | "pdp" | "cart" | "unknown";
+  category?: string;
+  productsViewed: Record<string, ProductViewStat>;
+  filters: Record<string, string | string[]>;
+  sort?: string;
+  sizeGuideOpens: SizeGuideOpen[];
+  lastUnavailableSizeView?: UnavailableSizeView;
+  checkoutStep: CheckoutStep;
+  checkoutOpenedAt?: string;
+  cartLastModifiedAt?: string;
+  lastActivityAt: string;
+  opportunityUsedThisSession: boolean;
+  triggersFiredThisSession: string[];
+}
+
+export function newSessionBehavior(): SessionBehavior {
+  return {
+    device: "unknown",
+    pageType: "unknown",
+    productsViewed: {},
+    filters: {},
+    sizeGuideOpens: [],
+    checkoutStep: "none",
+    lastActivityAt: new Date().toISOString(),
+    opportunityUsedThisSession: false,
+    triggersFiredThisSession: [],
+  };
+}
+
 export interface ChatSession {
   sessionId: string;
   customerId: string;
@@ -24,6 +92,10 @@ export interface ChatSession {
   customerName?: string;
   /** The real product the customer's current page is showing, if any. */
   currentProduct?: ProductPageContext;
+  identityTier: IdentityTier;
+  /** Populated from a real Bloomreach read — never fixture/fabricated data. */
+  profile?: CustomerProfile;
+  behavior: SessionBehavior;
 }
 
 export interface ProductPageContext {
@@ -40,4 +112,50 @@ export interface ProductPageContext {
 export interface CartHandoff {
   checkoutUrl: string;
   lineItems: Array<{ variantId: string; quantity: number }>;
+}
+
+/** A real search_catalog result — every field here must trace back to a Shopify read. */
+export interface MiaCandidate {
+  id: string;
+  sku: string;
+  variantId: string;
+  name: string;
+  category: string;
+  price: string;
+  sizesInStock: string[];
+  waterproof?: string;
+  insulation?: string;
+  weightG?: number;
+  fitNote?: string;
+  layer?: string;
+  pairsWith?: string[];
+  image?: string;
+}
+
+export interface MiaDecision {
+  action: "open_chat" | "stay_closed" | "continue";
+  readAs: string;
+  confidence: "low" | "medium" | "high";
+  rejected: Array<{ reading: string; why: string }>;
+  offer: { type: "none" | "free_shipping"; why: string };
+}
+
+export interface MiaReply {
+  text: string;
+  show: string[];
+  recommendSizes: Record<string, string>;
+  addToCart: Array<{ sku: string; size: string; qty: number }>;
+  openCheckout: boolean;
+  chips: string[];
+}
+
+export interface MiaWriteBack {
+  event: string;
+  properties: Record<string, unknown>;
+}
+
+export interface MiaResponse {
+  decision: MiaDecision;
+  reply: MiaReply;
+  writeBack: MiaWriteBack;
 }

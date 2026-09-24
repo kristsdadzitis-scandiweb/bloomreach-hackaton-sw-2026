@@ -14,6 +14,11 @@ export const config = {
     apiToken: required("BLOOMREACH_API_TOKEN"),
     customerIdField: required("BLOOMREACH_CUSTOMER_ID_FIELD", "cookie"),
     webhookSecret: required("BLOOMREACH_WEBHOOK_SECRET"),
+    // A Private-access API group's Key ID/Secret — structurally different from
+    // apiToken (a Public group's single token, used for Track API writes).
+    // Needed for the Customer API's Basic-auth-protected reads.
+    privateKeyId: required("BLOOMREACH_API_PRIVATE_ID"),
+    privateSecret: required("BLOOMREACH_API_PRIVATE_SECRET"),
   },
 
   google: {

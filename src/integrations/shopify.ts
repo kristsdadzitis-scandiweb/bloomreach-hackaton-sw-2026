@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import type { CartHandoff } from "../types.js";
+import type { CartHandoff, MiaCandidate } from "../types.js";
 
 /**
  * Shopify grounds the conversation in real stock/price, then builds the cart.
@@ -540,6 +540,213 @@ export async function getCart(cartId: string): Promise<CartSnapshot | null> {
   const data = await storefrontRequest<GetCartData>(GET_CART_QUERY, { cartId });
   if (!data.cart) return null;
   return { checkoutUrl: data.cart.checkoutUrl, totalQuantity: data.cart.totalQuantity };
+}
+
+// --- Mia / Northbound catalog tools ---
+// $app metafields carry display/reasoning-only attributes the Storefront
+// query string can't filter on (insulation, weight_g, fit_note, pairs_with);
+// tags carry anything search_catalog needs to filter at the query level
+// (waterproof tier, layer) — see CLAUDE.md for why the split is this way.
+
+const CATALOG_NODE_FIELDS = `
+  handle
+  title
+  productType
+  availableForSale
+  featuredImage { url }
+  priceRange { minVariantPrice { amount currencyCode } }
+  waterproofMeta: metafield(namespace: "$app", key: "waterproof") { value }
+  insulationMeta: metafield(namespace: "$app", key: "insulation") { value }
+  weightGMeta: metafield(namespace: "$app", key: "weight_g") { value }
+  fitNoteMeta: metafield(namespace: "$app", key: "fit_note") { value }
+  layerMeta: metafield(namespace: "$app", key: "layer") { value }
+  pairsWithMeta: metafield(namespace: "$app", key: "pairs_with") {
+    references(first: 5) { nodes { ... on Product { handle } } }
+  }
+  variants(first: 20) {
+    nodes { id sku quantityAvailable selectedOptions { name value } }
+  }
+`;
+
+interface CatalogNode {
+  handle: string;
+  title: string;
+  productType: string;
+  availableForSale: boolean;
+  featuredImage: { url: string } | null;
+  priceRange: { minVariantPrice: { amount: string; currencyCode: string } };
+  waterproofMeta: { value: string } | null;
+  insulationMeta: { value: string } | null;
+  weightGMeta: { value: string } | null;
+  fitNoteMeta: { value: string } | null;
+  layerMeta: { value: string } | null;
+  pairsWithMeta: { references: { nodes: Array<{ handle: string }> } } | null;
+  variants: {
+    nodes: Array<{
+      id: string;
+      sku: string;
+      quantityAvailable: number | null;
+      selectedOptions: Array<{ name: string; value: string }>;
+    }>;
+  };
+}
+
+function toMiaCandidate(node: CatalogNode): MiaCandidate {
+  const sizesInStock = node.variants.nodes
+    .filter((v) => (v.quantityAvailable ?? 0) > 0)
+    .map((v) => v.selectedOptions.find((o) => o.name.toLowerCase() === "size")?.value)
+    .filter((v): v is string => Boolean(v));
+  const firstVariant = node.variants.nodes[0];
+
+  return {
+    id: node.handle,
+    sku: firstVariant?.sku || node.handle,
+    variantId: firstVariant?.id ?? "",
+    name: node.title,
+    category: node.productType,
+    price: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
+    sizesInStock,
+    waterproof: node.waterproofMeta?.value,
+    insulation: node.insulationMeta?.value,
+    weightG: node.weightGMeta?.value ? Number(node.weightGMeta.value) : undefined,
+    fitNote: node.fitNoteMeta?.value,
+    layer: node.layerMeta?.value,
+    pairsWith: node.pairsWithMeta?.references.nodes.map((p) => p.handle),
+    image: node.featuredImage?.url,
+  };
+}
+
+const WATERPROOF_TIERS = ["none", "water-repellent", "10k", "20k", "28k"];
+
+const SEARCH_CATALOG_QUERY = `
+  query SearchCatalog($query: String!, $first: Int!) {
+    products(first: $first, query: $query) {
+      nodes { ${CATALOG_NODE_FIELDS} }
+    }
+  }
+`;
+
+interface SearchCatalogData {
+  products: { nodes: CatalogNode[] };
+}
+
+export interface SearchCatalogFilters {
+  category?: string;
+  waterproofMin?: string;
+  maxPrice?: number;
+  maxWeightG?: number;
+  size?: string;
+  layer?: "base" | "mid" | "shell" | "bottom" | "footwear" | "accessory";
+  pairsWith?: string;
+}
+
+/**
+ * The search_catalog tool's real implementation. Filters that Storefront's
+ * `query:` string supports (category/tag/price) run there; everything else
+ * (weight, size-in-stock) is filtered in-process after real data comes back,
+ * since Storefront can't filter on metafield values or variant options in
+ * the query string itself.
+ */
+export async function searchCatalog(filters: SearchCatalogFilters): Promise<MiaCandidate[]> {
+  if (filters.pairsWith) {
+    return searchCatalogPairsWith(filters.pairsWith);
+  }
+  if (!config.shopify.storeDomain) return [];
+
+  const clauses: string[] = [];
+  if (filters.category) clauses.push(`product_type:'${filters.category}'`);
+  if (filters.layer) clauses.push(`tag:'layer-${filters.layer}'`);
+  if (filters.waterproofMin) {
+    const minIndex = WATERPROOF_TIERS.indexOf(filters.waterproofMin);
+    const qualifyingTiers = minIndex >= 0 ? WATERPROOF_TIERS.slice(minIndex) : [filters.waterproofMin];
+    clauses.push(`(${qualifyingTiers.map((t) => `tag:'waterproof-${t}'`).join(" OR ")})`);
+  }
+  if (filters.maxPrice) clauses.push(`variants.price:<=${filters.maxPrice}`);
+
+  const data = await storefrontRequest<SearchCatalogData>(SEARCH_CATALOG_QUERY, {
+    query: clauses.join(" AND "),
+    first: 20,
+  });
+
+  let candidates = data.products.nodes.filter((n) => n.availableForSale).map(toMiaCandidate);
+  if (filters.maxWeightG) {
+    candidates = candidates.filter((c) => c.weightG === undefined || c.weightG <= filters.maxWeightG!);
+  }
+  if (filters.size) {
+    candidates = candidates.filter((c) => c.sizesInStock.includes(filters.size!));
+  }
+  return candidates.slice(0, 8);
+}
+
+/** "pairs_with: find complements for this product id" — reads the anchor's own real metafield, not a reverse search. */
+async function searchCatalogPairsWith(productHandle: string): Promise<MiaCandidate[]> {
+  const data = await storefrontRequest<{ product: CatalogNode | null }>(
+    `query PairsWith($handle: String!) { product(handle: $handle) { ${CATALOG_NODE_FIELDS} } }`,
+    { handle: productHandle },
+  );
+  const pairedHandles = data.product?.pairsWithMeta?.references.nodes.map((p) => p.handle) ?? [];
+  if (pairedHandles.length === 0) return [];
+
+  const results = await Promise.all(
+    pairedHandles.map((handle) =>
+      storefrontRequest<{ product: CatalogNode | null }>(
+        `query PairedProduct($handle: String!) { product(handle: $handle) { ${CATALOG_NODE_FIELDS} } }`,
+        { handle },
+      ),
+    ),
+  );
+  return results
+    .map((r) => r.product)
+    .filter((p): p is CatalogNode => Boolean(p) && p!.availableForSale)
+    .map(toMiaCandidate);
+}
+
+const CHECK_STOCK_QUERY = `
+  query CheckStock($query: String!) {
+    products(first: 20, query: $query) {
+      nodes {
+        handle
+        variants(first: 20) {
+          nodes { sku quantityAvailable selectedOptions { name value } }
+        }
+      }
+    }
+  }
+`;
+
+/** The check_stock tool: real per-size stock counts for the given SKUs, from Shopify. */
+export async function checkStock(skus: string[]): Promise<Record<string, Record<string, number>>> {
+  if (!config.shopify.storeDomain || skus.length === 0) return {};
+
+  const query = skus.map((sku) => `sku:'${sku}'`).join(" OR ");
+  const data = await storefrontRequest<{ products: { nodes: Array<{ variants: CatalogNode["variants"] }> } }>(
+    CHECK_STOCK_QUERY,
+    { query },
+  );
+
+  const result: Record<string, Record<string, number>> = {};
+  for (const product of data.products.nodes) {
+    for (const variant of product.variants.nodes) {
+      if (!skus.includes(variant.sku)) continue;
+      const size = variant.selectedOptions.find((o) => o.name.toLowerCase() === "size")?.value ?? "default";
+      result[variant.sku] = { ...(result[variant.sku] ?? {}), [size]: variant.quantityAvailable ?? 0 };
+    }
+  }
+  return result;
+}
+
+/** Resolves a real Shopify variantId from a merchant SKU — create_cart works by SKU per the playbook, addToCart by variantId internally. */
+export async function resolveVariantIdBySku(sku: string): Promise<string | null> {
+  if (!config.shopify.storeDomain) return null;
+  const data = await storefrontRequest<{ products: { nodes: Array<{ variants: { nodes: Array<{ id: string; sku: string }> } }> } }>(
+    `query BySku($query: String!) { products(first: 5, query: $query) { nodes { variants(first: 20) { nodes { id sku } } } } }`,
+    { query: `sku:'${sku}'` },
+  );
+  for (const product of data.products.nodes) {
+    const match = product.variants.nodes.find((v) => v.sku === sku);
+    if (match) return match.id;
+  }
+  return null;
 }
 
 function mockProducts(query: string): ProductSummary[] {
