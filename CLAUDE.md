@@ -159,3 +159,75 @@ Idea: have `POST /api/chat/checkout` write a transaction row to Databricks the m
 cart updates, same event/instant as the Bloomreach write, fire-and-forget. Blocked on
 getting a real Databricks workspace URL + SQL warehouse HTTP path from the user — the
 token alone isn't enough for the app to call the SQL Statement Execution API itself.
+
+# Shopify access
+
+Unlike Bloomreach/Databricks, this one has **no MCP/interactive-login layer** for the
+app's own data — the app talks to Shopify directly over HTTP with credentials from
+`.env`, so it works the same whether it's this session, another session, or the deployed
+Cloud Run service making the call. The `shopify-plugin:*` skills (shopify-admin-graphql,
+shopify-dev, shopify-use-shopify-cli, etc.) are for authoring/looking up API operations —
+separate from actually calling the store, which just needs `fetch` + these credentials.
+
+Store: `team-scandiweb.myshopify.com` (dev store, org "Scandiweb AI Hackathon"), API
+version `2026-01` (`SHOPIFY_API_VERSION`).
+
+- **Storefront API** (`src/integrations/shopify.ts`, everything the chat bot itself
+  uses — search, cart, checkout, demo login) — `POST
+  https://${SHOPIFY_STORE_DOMAIN}/api/${SHOPIFY_API_VERSION}/graphql.json` with header
+  `X-Shopify-Storefront-Access-Token: ${SHOPIFY_STOREFRONT_API_TOKEN}`. This token is
+  long-lived, already in `.env`, nothing to refresh.
+- **Admin API** — same GraphQL endpoint shape but `/admin/api/{version}/graphql.json`
+  with header `X-Shopify-Access-Token`. `SHOPIFY_ADMIN_API_TOKEN` in `.env` is
+  **short-lived** (client_credentials grant) and will expire — if an Admin call suddenly
+  401s, that's why, not a revoked permission. Get a fresh one:
+  ```
+  POST https://team-scandiweb.myshopify.com/admin/oauth/access_token
+  { "client_id": SHOPIFY_APP_CLIENT_ID, "client_secret": SHOPIFY_APP_CLIENT_SECRET, "grant_type": "client_credentials" }
+  ```
+  Used rarely in this app (e.g. `productsCount`) — the app's own runtime code only uses
+  the Storefront API; Admin API calls so far have all been one-off investigation, not
+  code in the repo.
+- **Theme app extension / Shopify CLI** — separate repo,
+  `/home/scandiweb/Development/bloomreach-hackaton-sw-2026-shopify-app` (`shopify.app.toml`,
+  `client_id = 6aea90769662205d2d66ecdf0f8a3de4`). `shopify app deploy --allow-updates`
+  works fine here. `shopify app dev` (live tunnel preview) does **not** work in this
+  sandbox — outbound QUIC is blocked (Cloudflare tunnel times out), and the
+  `--use-localhost`/`--install-mkcert` fallbacks need an interactive `sudo` password
+  prompt this environment can't supply. Don't retry any of that; go straight to `deploy`.
+  This is a non-issue in practice since `widget.js` is hosted on Cloud Run, not bundled
+  as an extension asset needing hot-reload.
+- The extension's own App Embeds section never appeared in this store's theme editor
+  (Online Store → Themes → Customize → theme settings) despite the app being installed
+  and the extension-bearing version being active — unresolved, worked around by pasting
+  the widget's `<script>` tags directly into `theme.liquid` (Edit code) instead. If a
+  future session wants the cleaner merchant-facing toggle, that's the open thread — but
+  it's not blocking anything, don't spend time rediscovering the same dead end.
+
+# Google Cloud Run deployment
+
+Project `qwiklabs-gcp-02-9567efd29b14`, region `europe-west1`, service `chat-to-buy`.
+Deployed straight from source (no separate CI):
+```
+gcloud run deploy chat-to-buy --source . --region europe-west1 --allow-unauthenticated \
+  --project qwiklabs-gcp-02-9567efd29b14 --env-vars-file <path>/cloudrun-env.yaml --quiet
+```
+Cloud Run doesn't read `.env` — the `--env-vars-file` YAML has to be regenerated from it
+before every deploy (it's gitignored scratch, not checked in). A quick way:
+```js
+node -e "
+const fs = require('fs');
+const lines = fs.readFileSync('.env', 'utf8').split('\n').filter(l => l.includes('=') && !l.startsWith('#'));
+const yaml = lines.map(l => { const i = l.indexOf('='); return l.slice(0, i) + ': ' + JSON.stringify(l.slice(i + 1)); }).join('\n');
+fs.writeFileSync('/path/to/scratchpad/cloudrun-env.yaml', yaml);
+"
+```
+`DATABRICKS_TOKEN` is in `.env` but never makes it into `config.ts`/the deployed env —
+harmless to include or omit, the app doesn't read it either way (see "Databricks access"
+above — the app has no Databricks wiring at all yet).
+
+# Gemini API
+
+Also no MCP layer — plain REST from `src/integrations/gemini.ts`:
+`POST https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`.
+`GEMINI_API_KEY`/`GEMINI_MODEL` from `.env`, nothing to refresh or re-authenticate.
