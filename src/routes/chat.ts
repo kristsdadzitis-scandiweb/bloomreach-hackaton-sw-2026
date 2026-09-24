@@ -4,6 +4,7 @@ import { chatReply } from "../integrations/gemini.js";
 import {
   addToCart,
   attachDemoDeliveryAddress,
+  getCart,
   getProductByHandle,
   loginDemoCustomer,
   updateCartBuyerIdentity,
@@ -43,7 +44,16 @@ chatRouter.post("/session", async (req, res) => {
     }
   }
 
-  res.json({ sessionId: session.sessionId, product: session.currentProduct ?? null, history: session.history });
+  // The cart itself outlives a page reload (it's a real Shopify object) — the
+  // widget's in-memory knowledge of it doesn't, so hand it back on resume.
+  const cart = session.cartId ? await getCart(session.cartId) : null;
+
+  res.json({
+    sessionId: session.sessionId,
+    product: session.currentProduct ?? null,
+    history: session.history,
+    cart,
+  });
 });
 
 chatRouter.post("/message", async (req, res) => {

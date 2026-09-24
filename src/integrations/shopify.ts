@@ -512,6 +512,36 @@ export async function addToCart(
   return { cartId: cart.id, checkoutUrl: cart.checkoutUrl, lineItems, totalQuantity: cart.totalQuantity };
 }
 
+const GET_CART_QUERY = `
+  query GetCart($cartId: ID!) {
+    cart(id: $cartId) {
+      checkoutUrl
+      totalQuantity
+    }
+  }
+`;
+
+interface GetCartData {
+  cart: { checkoutUrl: string; totalQuantity: number } | null;
+}
+
+export interface CartSnapshot {
+  checkoutUrl: string;
+  totalQuantity: number;
+}
+
+/**
+ * Re-fetches an existing cart's current state — used to restore the cart bar
+ * after a page navigation. The cart itself lives on in Shopify regardless of
+ * page reloads; only the widget's in-memory knowledge of it was ever lost.
+ */
+export async function getCart(cartId: string): Promise<CartSnapshot | null> {
+  if (!config.shopify.storeDomain) return null;
+  const data = await storefrontRequest<GetCartData>(GET_CART_QUERY, { cartId });
+  if (!data.cart) return null;
+  return { checkoutUrl: data.cart.checkoutUrl, totalQuantity: data.cart.totalQuantity };
+}
+
 function mockProducts(query: string): ProductSummary[] {
   return [
     {

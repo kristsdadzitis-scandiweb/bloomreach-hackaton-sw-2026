@@ -158,6 +158,10 @@
 
   let sessionId = null;
   let opened = false;
+  // Whether this session already has a real conversation (as opposed to a
+  // brand-new session) — used so reopening the chat on a fresh page load
+  // doesn't fire the canned proactive greeting on top of real history.
+  let hasHistory = false;
 
   if (config.customer?.firstName) {
     headerTitle.textContent = `Hi, ${config.customer.firstName} 👋`;
@@ -295,7 +299,10 @@
         sessionId = data.sessionId;
         setStoredSessionId(sessionId);
 
+        if (data.cart?.totalQuantity > 0) showCartBar(data.cart);
+
         if (data.history?.length) {
+          hasHistory = true;
           for (const turn of data.history) {
             appendBubble(turn.role, turn.message);
             if (turn.products?.length) appendProductCards(turn.products);
@@ -378,10 +385,15 @@
   }
 
   launcher.addEventListener("click", () => {
-    if (!opened) {
-      triggerProactiveGreeting();
-    } else {
+    // A fresh page load starts `opened` at false even when a real
+    // conversation already exists (it was just replayed into a closed
+    // panel) — only the canned greeting path should check `opened` itself;
+    // an existing conversation should just reopen, not get a second,
+    // out-of-place "Hi! Looking for anything today?" appended after it.
+    if (opened || hasHistory) {
       openChat();
+    } else {
+      triggerProactiveGreeting();
     }
   });
   closeBtn.addEventListener("click", closeChat);
