@@ -226,15 +226,46 @@
     } catch {}
   }
 
-  /** Fire-and-forget behavior reporting — local session state for trigger detection, never a Bloomreach write itself. */
+  /**
+   * Fire-and-forget behavior reporting — local session state for trigger
+   * detection, never a Bloomreach write itself.
+   *
+   * Deliberately NOT navigator.sendBeacon(): the widget is always cross-origin
+   * from the storefront (Cloud Run backend, not the shop's own domain), and a
+   * beacon with a non-CORS-safelisted Content-Type like application/json
+   * doesn't reliably complete the CORS preflight in real browsers — it just
+   * fails with a CORS error in the console, silently, since sendBeacon has no
+   * way to report that back to the page. `fetch(..., {keepalive:true})` runs
+   * through the exact same CORS negotiation as every other call this widget
+   * makes (already verified working against this backend) while still
+   * surviving page unload, which is the only reason sendBeacon was used here.
+   */
+  function postEvent(event, properties) {
+    if (!sessionId) return Promise.resolve();
+    return fetch(api("/api/chat/event"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, event, properties: properties ?? {} }),
+      keepalive: true,
+    });
+  }
+
   function sendEvent(event, properties) {
-    if (!sessionId) return;
-    const body = JSON.stringify({ sessionId, event, properties: properties ?? {} });
-    if (navigator.sendBeacon) {
-      navigator.sendBeacon(api("/api/chat/event"), new Blob([body], { type: "application/json" }));
-    } else {
-      fetch(api("/api/chat/event"), { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+    postEvent(event, properties).catch(() => {});
+  }
+
+  // Some events (size guide reopened, availability block) can make a trigger
+  // true the instant they happen — waiting on the next background poll tick
+  // (up to ~14s away) makes a working feature look broken. sendEvent is
+  // fire-and-forget with no ordering guarantee against a signal-check sent
+  // right after it, so this awaits the event landing first, then checks.
+  async function reportEventAndRecheck(event, properties) {
+    try {
+      await postEvent(event, properties);
+    } catch {
+      return;
     }
+    checkSignal();
   }
 
   // Dwell time on a product page — one real behavioral signal the size-guide
@@ -324,7 +355,7 @@
       }
       // Every open is a real reopen signal, not just the first — that's
       // exactly what size_guide_reopened is watching for.
-      sendEvent("size_guide_opened", { productId: product.id });
+      reportEventAndRecheck("size_guide_opened", { productId: product.id });
 
       sizeGuidePopover.innerHTML = `
         <div class="ctb-sg-title">${product.name} — sizes</div>
@@ -342,7 +373,7 @@
         pill.textContent = size;
         pill.addEventListener("click", () => {
           if (stock === 0) {
-            sendEvent("size_unavailable_viewed", { sku: product.sku, size });
+            reportEventAndRecheck("size_unavailable_viewed", { sku: product.sku, size });
             stockLine.textContent = `${size} is out of stock right now.`;
             return;
           }
