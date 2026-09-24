@@ -166,6 +166,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
         evidence: [
           `${ids.size} distinct ${category} products viewed within 10 minutes: ${[...ids].join(", ")}`,
           "cart is still empty — undecided, not blocked",
+          "this rule already requires 3+ distinct products in one category with no cart add — that pattern alone is the stall, regardless of how long any single view lasted; do not additionally judge dwell time or second-guess this as \"too quick to be real\"",
           "ask which of price, weight or waterproofing matters most, never guess the criterion",
         ],
         alsoTrue,
