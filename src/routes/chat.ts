@@ -97,10 +97,20 @@ async function runMiaTurn(session: ChatSession, latestMessage: string | undefine
     if (result.response.writeBack?.event) {
       await recordEvent(session.customerId, result.response.writeBack.event, result.response.writeBack.properties).catch(() => {});
     }
-    if (signalCase.trigger !== "hold_back") {
+    // Only count a trigger as "used" once Mia actually decided to speak. The
+    // rule matching is cheap and allowed to keep re-firing every check — it's
+    // Gemini's judgment call each time whether the evidence is real yet (e.g.
+    // comparison_stall correctly declines on a quick skim, but should still
+    // get to fire later once dwell time genuinely looks like comparison).
+    // Marking it used on a mere rule-match, regardless of the model's
+    // decision, silently burned the one shot on a declined attempt — this
+    // was a real bug: a quick early test made comparison_stall permanently
+    // unreproducible for the rest of that session.
+    const spoke = result.response.decision.action === "open_chat";
+    if (signalCase.trigger !== "hold_back" && spoke) {
       session.behavior.triggersFiredThisSession.push(signalCase.firedKey);
     }
-    if (signalCase.trigger === "complete_the_kit") {
+    if (signalCase.trigger === "complete_the_kit" && spoke) {
       session.behavior.opportunityUsedThisSession = true;
     }
     settleIdentityAfterTurn(session);
