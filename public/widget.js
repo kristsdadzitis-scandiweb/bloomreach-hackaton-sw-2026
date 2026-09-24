@@ -571,6 +571,17 @@
       if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
       return;
     }
+    // The server keeps sessions in memory only — a redeploy or a container
+    // recycle can make a previously-valid sessionId genuinely unknown to it.
+    // That response has no `reply` field, so treating it like a normal 200
+    // used to open an empty, silent chat panel. Recover instead: drop the
+    // dead id and quietly re-establish a fresh session for next time.
+    if (res.status === 404) {
+      resetSession();
+      ensureSession();
+      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
+      return;
+    }
     const data = await res.json();
     hasHistory = true;
     openChat();
@@ -580,6 +591,13 @@
   }
 
   let sessionPromise = null;
+  function resetSession() {
+    sessionId = null;
+    sessionPromise = null;
+    try {
+      localStorage.removeItem(STORAGE_SESSION_KEY);
+    } catch {}
+  }
   function ensureSession() {
     if (!sessionPromise) {
       sessionPromise = (async () => {
@@ -620,6 +638,14 @@
   }
   ensureSession();
 
+  async function postMessage(message) {
+    return fetch(api("/api/chat/message"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, message }),
+    });
+  }
+
   async function sendMessage(message) {
     if (!opened) openChat();
     appendBubble("customer", message);
@@ -630,11 +656,20 @@
 
     let data;
     try {
-      const res = await fetch(api("/api/chat/message"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, message }),
-      });
+      let res = await postMessage(message);
+      // Same dead-session case as performSignalCheck, but here the customer's
+      // own message is sitting in the log waiting on a reply — silently
+      // dropping it would look like the chat just stopped working. Re-
+      // establish a fresh session and resend it once instead.
+      if (res.status === 404) {
+        resetSession();
+        await ensureSession();
+        res = await postMessage(message);
+      }
+      if (!res.ok) {
+        appendBubble("agent", "Sorry, something went wrong on my end — could you try that again?");
+        return;
+      }
       data = await res.json();
     } finally {
       hideThinking();
