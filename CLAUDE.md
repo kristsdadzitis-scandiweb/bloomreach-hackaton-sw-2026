@@ -308,6 +308,41 @@ fs.writeFileSync('/path/to/scratchpad/cloudrun-env.yaml', yaml);
 harmless to include or omit, the app doesn't read it either way (see "Databricks access"
 above — the app has no Databricks wiring at all yet).
 
+## Pinned to exactly one instance — don't remove this
+
+`chat_router.ts`'s `sessions` Map is in-memory only, in one Node process — there is no
+database behind it. This service is deployed with **`--min-instances=1
+--max-instances=1`** (always include both flags on every future deploy, they don't
+persist from the service config unless explicitly passed on `gcloud run deploy` again —
+confirmed a plain `gcloud run deploy` without them can reset scaling to defaults).
+Without `minScale=1`, Cloud Run scales to zero after a few idle minutes and the next
+request cold-starts a brand-new container with an empty session Map — every open chat
+silently vanishes, which is exactly what happened for real once already this project
+(reported as "the chat clears out after a while" and later "the message call returns a
+404"). Without `maxScale=1`, concurrent requests from the *same* visitor could land on
+*different* instances, each with its own separate session state — same failure, subtler
+trigger. Given the app's actual traffic (a single hackathon demo, not real concurrent
+load), pinning to one always-on instance is the correct fix for this architecture, not
+a workaround — don't "optimize" it back to autoscaling without adding real session
+persistence (Bloomreach, a database, anything durable) first.
+
+**This does not make sessions survive a redeploy.** A new revision means a brand new
+container — any deploy (even one that only changes scaling flags, confirmed: running
+`gcloud run services update --min-instances=1 --max-instances=1` alone created a new
+revision and wiped every session that existed the moment traffic cut over) resets every
+open chat. That's an accepted, known-in-advance event under our control, unlike the
+random cold-start case above — but warn whoever's testing live before deploying while
+they're mid-session, and don't deploy silently mid-demo.
+
+**The widget itself now recovers gracefully from a dead session** either way (see
+`public/widget.js`'s `resetSession`/404-handling in `performSignalCheck` and
+`sendMessage`) — a `/message` or `/signal-check` call against a sessionId the server no
+longer recognizes used to silently pop open an empty, message-less chat panel or drop
+the customer's own typed message with no response at all; it now quietly re-establishes
+a fresh session in the background (and resends the message once, for `sendMessage`)
+instead. It cannot recover the lost conversation history itself — only real persistence
+would do that — but it stops looking broken.
+
 # Gemini API
 
 Also no MCP layer — plain REST from `src/integrations/gemini.ts`:
