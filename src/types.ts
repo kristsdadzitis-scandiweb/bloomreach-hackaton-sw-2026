@@ -9,8 +9,8 @@ export interface ChatTurn {
   role: "customer" | "agent";
   message: string;
   timestamp: string;
-  /** Product cards shown alongside an agent turn, if search_products was called. */
-  products?: ProductPageContext[];
+  /** Product cards shown alongside an agent turn, if search_catalog was called. */
+  products?: MiaCandidate[];
 }
 
 export type IdentityTier = "anonymous" | "known" | "just_signed_in";
@@ -122,7 +122,12 @@ export interface MiaCandidate {
   name: string;
   category: string;
   price: string;
+  /** True if any variant (sized or not) has real stock — the general purchasability check. */
+  available: boolean;
   sizesInStock: string[];
+  /** Real per-size stock counts and variant ids — the widget needs the exact variantId for the size actually selected, not just the first variant. Empty for products with no Size option. */
+  stockBySize: Record<string, number>;
+  variantIdsBySize: Record<string, string>;
   waterproof?: string;
   insulation?: string;
   weightG?: number;

@@ -592,11 +592,24 @@ interface CatalogNode {
 }
 
 function toMiaCandidate(node: CatalogNode): MiaCandidate {
+  const sizeOf = (v: CatalogNode["variants"]["nodes"][number]) => v.selectedOptions.find((o) => o.name.toLowerCase() === "size")?.value;
+
   const sizesInStock = node.variants.nodes
     .filter((v) => (v.quantityAvailable ?? 0) > 0)
-    .map((v) => v.selectedOptions.find((o) => o.name.toLowerCase() === "size")?.value)
+    .map(sizeOf)
     .filter((v): v is string => Boolean(v));
+
+  const stockBySize: Record<string, number> = {};
+  const variantIdsBySize: Record<string, string> = {};
+  for (const v of node.variants.nodes) {
+    const size = sizeOf(v);
+    if (!size) continue;
+    stockBySize[size] = v.quantityAvailable ?? 0;
+    variantIdsBySize[size] = v.id;
+  }
+
   const firstVariant = node.variants.nodes[0];
+  const available = node.variants.nodes.some((v) => (v.quantityAvailable ?? 0) > 0);
 
   return {
     id: node.handle,
@@ -605,7 +618,10 @@ function toMiaCandidate(node: CatalogNode): MiaCandidate {
     name: node.title,
     category: node.productType,
     price: `${node.priceRange.minVariantPrice.amount} ${node.priceRange.minVariantPrice.currencyCode}`,
+    available,
     sizesInStock,
+    stockBySize,
+    variantIdsBySize,
     waterproof: node.waterproofMeta?.value,
     insulation: node.insulationMeta?.value,
     weightG: node.weightGMeta?.value ? Number(node.weightGMeta.value) : undefined,

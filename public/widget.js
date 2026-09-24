@@ -1,22 +1,22 @@
 /**
- * Chat-to-Buy embeddable widget — loaded by the theme app extension's app
- * embed block. Unlike public/app.js (built for the mock demo page, which
- * already has the widget's markup in its HTML), this builds its own DOM and
- * styles from scratch, since a real theme's page has none of that.
+ * Mia — the Northbound shopping assistant. Embeddable widget loaded by the
+ * theme app extension's app embed block. Builds its own DOM/styles from
+ * scratch since a real theme's page has none of that.
  *
- * Scope note: this greets a real logged-in shopper by name (from the
- * Liquid `customer` global the embed block passes in), but doesn't attempt
- * to attach their real Shopify identity to the cart for checkout
- * personalization — that needs an actual customerAccessToken, which Liquid
- * can't hand to page JS for a real shopper. The demo's "Log in" toggle
- * (a fixed simulated account) is intentionally not part of this widget.
+ * Unlike the old Chat-to-Buy widget, the proactive open isn't a fixed
+ * client-side timer — it's driven by the backend's real signal-evaluation
+ * layer (POST /api/chat/signal-check), which this widget polls while closed.
+ * "Known" identity (greeting by name, personalization) comes from a real
+ * Bloomreach read the backend does on /session, not from Liquid alone — it
+ * works for anonymous-cookie visitors Bloomreach already knows, not just a
+ * real logged-in Shopify customer.
  */
 (function () {
   const configEl = document.getElementById("chat-to-buy-config");
   const config = configEl ? JSON.parse(configEl.textContent) : {};
   const backendUrl = config.backendUrl || "";
   if (!backendUrl) {
-    console.error("[chat-to-buy] no backend URL configured, widget disabled");
+    console.error("[mia] no backend URL configured, widget disabled");
     return;
   }
 
@@ -51,26 +51,26 @@
     #ctb-launcher {
       position: fixed !important; bottom: 20px !important; right: 20px !important; top: auto !important; left: auto !important;
       width: 60px; height: 60px; border-radius: 50%;
-      background: #1a1a1a; color: #fff; border: none; font-size: 24px; cursor: pointer;
+      background: #1e3a2f; color: #fff; border: none; font-size: 24px; cursor: pointer;
       box-shadow: 0 4px 16px rgba(0,0,0,0.25); z-index: 2147483000 !important;
     }
     #ctb-launcher[hidden] { display: none; }
     #ctb-panel {
       position: fixed !important; bottom: 20px !important; right: 20px !important; top: auto !important; left: auto !important;
-      width: 340px; max-width: calc(100vw - 40px);
-      height: 480px; max-height: calc(100vh - 40px); background: #fff; border-radius: 14px;
+      width: 360px; max-width: calc(100vw - 40px);
+      height: 520px; max-height: calc(100vh - 40px); background: #fff; border-radius: 14px;
       box-shadow: 0 8px 32px rgba(0,0,0,0.25); display: flex; flex-direction: column; overflow: hidden;
       z-index: 2147483000 !important; color: #1a1a1a;
     }
     #ctb-panel[hidden] { display: none; }
     #ctb-header {
-      background: #1a1a1a; color: #fff; padding: 12px 14px; display: flex; align-items: center;
+      background: #1e3a2f; color: #fff; padding: 12px 14px; display: flex; align-items: center;
       justify-content: space-between; font-size: 14px; font-weight: 600;
     }
     #ctb-close { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; line-height: 1; }
     #ctb-log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
     .ctb-bubble { max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
-    .ctb-bubble.customer { align-self: flex-end; background: #1a1a1a; color: #fff; border-bottom-right-radius: 2px; }
+    .ctb-bubble.customer { align-self: flex-end; background: #1e3a2f; color: #fff; border-bottom-right-radius: 2px; }
     .ctb-bubble.agent { align-self: flex-start; background: #f0f0f0; color: #1a1a1a; border-bottom-left-radius: 2px; }
     .ctb-bubble.thinking { display: flex; align-items: center; gap: 4px; padding: 12px; }
     .ctb-bubble.thinking span {
@@ -80,20 +80,32 @@
     .ctb-bubble.thinking span:nth-child(2) { animation-delay: 0.15s; }
     .ctb-bubble.thinking span:nth-child(3) { animation-delay: 0.3s; }
     @keyframes ctb-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
-    .ctb-product-cards { align-self: flex-start; display: flex; flex-direction: column; gap: 8px; max-width: 90%; }
-    .ctb-product-card { border: 1px solid #e0e0e0; border-radius: 10px; padding: 8px 10px; display: flex; align-items: center; gap: 10px; }
+    .ctb-product-cards { align-self: flex-start; display: flex; flex-direction: column; gap: 10px; max-width: 92%; width: 92%; }
+    .ctb-product-card { border: 1px solid #e0e0e0; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+    .ctb-product-card .ctb-card-top { display: flex; align-items: flex-start; gap: 10px; }
     .ctb-product-card .ctb-thumb {
-      width: 40px; height: 40px; border-radius: 6px; background: linear-gradient(135deg, #e2e2e2, #cfcfcf); flex-shrink: 0;
+      width: 48px; height: 48px; border-radius: 6px; background: linear-gradient(135deg, #e2e2e2, #cfcfcf); flex-shrink: 0;
       object-fit: cover; display: block;
     }
     .ctb-product-card .ctb-thumb-link { display: block; flex-shrink: 0; }
     .ctb-product-card .ctb-info { flex: 1; min-width: 0; text-decoration: none; color: inherit; display: block; }
     .ctb-product-card .ctb-info:hover .ctb-title { text-decoration: underline; }
-    .ctb-product-card .ctb-info .ctb-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ctb-product-card .ctb-info .ctb-price { font-size: 12px; color: #666; margin: 0; }
-    .ctb-product-card button {
-      font-size: 12px; padding: 6px 10px; border-radius: 6px; border: 1px solid #1a1a1a; background: #fff; cursor: pointer;
+    .ctb-product-card .ctb-info .ctb-title { font-size: 13px; font-weight: 600; }
+    .ctb-product-card .ctb-info .ctb-attr { font-size: 12px; color: #1e3a2f; margin: 2px 0 0; }
+    .ctb-product-card .ctb-info .ctb-price { font-size: 12px; color: #666; margin: 2px 0 0; }
+    .ctb-size-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ctb-size-pill {
+      font-size: 12px; padding: 4px 9px; border-radius: 999px; border: 1px solid #ccc; background: #fff; cursor: pointer;
     }
+    .ctb-size-pill.selected { border-color: #1e3a2f; background: #1e3a2f; color: #fff; }
+    .ctb-size-pill.unavailable { text-decoration: line-through; color: #bbb; cursor: not-allowed; border-color: #eee; }
+    .ctb-stock-line { font-size: 11px; color: #888; }
+    .ctb-size-guide-link { font-size: 11px; color: #1e3a2f; background: none; border: none; text-decoration: underline; cursor: pointer; padding: 0; align-self: flex-start; }
+    .ctb-size-guide-note { font-size: 11px; color: #555; background: #f6f6f6; border-radius: 6px; padding: 6px 8px; }
+    .ctb-product-card .ctb-add-btn {
+      font-size: 12px; padding: 6px 10px; border-radius: 6px; border: 1px solid #1e3a2f; background: #fff; cursor: pointer; align-self: flex-start;
+    }
+    .ctb-product-card .ctb-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     #ctb-quick-replies { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
     #ctb-quick-replies button {
       font-size: 12px; padding: 6px 10px; border-radius: 999px; border: 1px solid #ccc; background: #fff; cursor: pointer;
@@ -104,13 +116,13 @@
     }
     #ctb-cart-bar[hidden] { display: none; }
     #ctb-cart-link {
-      background: #1a1a1a; color: #fff; text-decoration: none; padding: 8px 14px;
+      background: #1e3a2f; color: #fff; text-decoration: none; padding: 8px 14px;
       border-radius: 8px; font-size: 13px; font-weight: 600;
     }
     #ctb-chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eee; }
     #ctb-input { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }
     #ctb-chat-form button[type="submit"] {
-      padding: 8px 14px; border-radius: 8px; border: none; background: #1a1a1a; color: #fff; cursor: pointer;
+      padding: 8px 14px; border-radius: 8px; border: none; background: #1e3a2f; color: #fff; cursor: pointer;
     }
   `;
   document.head.appendChild(style);
@@ -119,10 +131,10 @@
   const root = document.createElement("div");
   root.id = "chat-to-buy-widget";
   root.innerHTML = `
-    <button id="ctb-launcher" aria-label="Open chat">💬</button>
+    <button id="ctb-launcher" aria-label="Open chat">🏔️</button>
     <div id="ctb-panel" hidden>
       <div id="ctb-header">
-        <span id="ctb-header-title">Need help?</span>
+        <span id="ctb-header-title">Hi, I'm Mia 👋</span>
         <button id="ctb-close" aria-label="Close chat">✕</button>
       </div>
       <div id="ctb-log"></div>
@@ -160,12 +172,10 @@
   let opened = false;
   // Whether this session already has a real conversation (as opposed to a
   // brand-new session) — used so reopening the chat on a fresh page load
-  // doesn't fire the canned proactive greeting on top of real history.
+  // doesn't fire a duplicate proactive turn on top of it.
   let hasHistory = false;
 
-  if (config.customer?.firstName) {
-    headerTitle.textContent = `Hi, ${config.customer.firstName} 👋`;
-  }
+  const customerId = config.customer?.id || anonymousId();
 
   // A real storefront reloads the whole page on every navigation, so nothing
   // in module state survives moving from one page to the next — persist the
@@ -196,6 +206,29 @@
     try {
       localStorage.setItem(STORAGE_OPEN_KEY, isOpen ? "1" : "0");
     } catch {}
+  }
+
+  /** Fire-and-forget behavior reporting — local session state for trigger detection, never a Bloomreach write itself. */
+  function sendEvent(event, properties) {
+    if (!sessionId) return;
+    const body = JSON.stringify({ sessionId, event, properties: properties ?? {} });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(api("/api/chat/event"), new Blob([body], { type: "application/json" }));
+    } else {
+      fetch(api("/api/chat/event"), { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+    }
+  }
+
+  // Dwell time on a product page — one real behavioral signal the size-guide
+  // and availability triggers don't need, but complete_the_kit/cart_left_behind
+  // reasoning benefits from knowing what the shopper actually looked at.
+  const viewedProductId = currentProductHandle();
+  const viewStartedAt = performance.now();
+  if (viewedProductId) {
+    window.addEventListener("pagehide", () => {
+      const seconds = Math.round((performance.now() - viewStartedAt) / 1000);
+      sendEvent("product_view_end", { productId: viewedProductId, seconds });
+    });
   }
 
   function scrollToBottom() {
@@ -235,6 +268,7 @@
   }
 
   function appendBubble(role, text) {
+    if (!text) return;
     const el = document.createElement("div");
     el.className = `ctb-bubble ${role}`;
     el.textContent = text;
@@ -242,34 +276,111 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  /** The one attribute line the playbook wants named before a recommendation — fit note beats a raw spec. */
+  function attributeLine(product) {
+    if (product.fitNote) return product.fitNote;
+    if (product.waterproof) return `Waterproof rating: ${product.waterproof}`;
+    if (product.insulation) return `Insulation: ${product.insulation}`;
+    if (product.layer) return `Layer: ${product.layer}`;
+    return "";
+  }
+
   function appendProductCards(products) {
-    const inStock = (products ?? []).filter((p) => p.available && p.variantId);
-    if (!inStock.length) return;
+    const shown = (products ?? []).filter((p) => p.available);
+    if (!shown.length) return;
     const wrap = document.createElement("div");
     wrap.className = "ctb-product-cards";
 
-    for (const product of inStock) {
-      const card = document.createElement("div");
-      card.className = "ctb-product-card";
-      const href = product.handle ? `/products/${product.handle}` : "#";
-      const thumb = product.image
-        ? `<img class="ctb-thumb" src="${product.image}" alt="${product.title}">`
-        : `<div class="ctb-thumb"></div>`;
-      card.innerHTML = `
-        <a class="ctb-thumb-link" href="${href}">${thumb}</a>
-        <a class="ctb-info" href="${href}">
-          <div class="ctb-title">${product.title}</div>
-          <p class="ctb-price">${product.priceRange}</p>
-        </a>
-        <button>Add to cart</button>
-      `;
-      const btn = card.querySelector("button");
-      btn.addEventListener("click", () => addProductToCart(product, btn));
-      wrap.appendChild(card);
+    for (const product of shown) {
+      wrap.appendChild(buildProductCard(product));
     }
 
     log.appendChild(wrap);
     log.scrollTop = log.scrollHeight;
+  }
+
+  function buildProductCard(product) {
+    const card = document.createElement("div");
+    card.className = "ctb-product-card";
+    const href = product.id ? `/products/${product.id}` : "#";
+    const thumb = product.image
+      ? `<img class="ctb-thumb" src="${product.image}" alt="${product.name}">`
+      : `<div class="ctb-thumb"></div>`;
+    const attr = attributeLine(product);
+
+    card.innerHTML = `
+      <div class="ctb-card-top">
+        <a class="ctb-thumb-link" href="${href}">${thumb}</a>
+        <a class="ctb-info" href="${href}">
+          <div class="ctb-title">${product.name}</div>
+          ${attr ? `<p class="ctb-attr">${attr}</p>` : ""}
+          <p class="ctb-price">${product.price}</p>
+        </a>
+      </div>
+    `;
+
+    let selectedSize = null;
+    const hasSizes = product.sizesInStock && Object.keys(product.stockBySize || {}).length > 0;
+
+    if (hasSizes) {
+      const pillsWrap = document.createElement("div");
+      pillsWrap.className = "ctb-size-pills";
+      for (const [size, stock] of Object.entries(product.stockBySize)) {
+        const pill = document.createElement("button");
+        pill.type = "button";
+        pill.className = "ctb-size-pill" + (stock === 0 ? " unavailable" : "");
+        pill.textContent = size;
+        pill.addEventListener("click", () => {
+          if (stock === 0) {
+            sendEvent("size_unavailable_viewed", { sku: product.sku, size });
+            return;
+          }
+          selectedSize = size;
+          pillsWrap.querySelectorAll(".ctb-size-pill").forEach((el) => el.classList.remove("selected"));
+          pill.classList.add("selected");
+          stockLine.textContent = stock <= 3 ? `Only ${stock} left in ${size}` : `In stock in ${size}`;
+          addBtn.disabled = false;
+        });
+        pillsWrap.appendChild(pill);
+      }
+      card.appendChild(pillsWrap);
+
+      const stockLine = document.createElement("p");
+      stockLine.className = "ctb-stock-line";
+      card.appendChild(stockLine);
+
+      if (product.fitNote) {
+        const guideLink = document.createElement("button");
+        guideLink.type = "button";
+        guideLink.className = "ctb-size-guide-link";
+        guideLink.textContent = "Size guide";
+        let noteShown = false;
+        guideLink.addEventListener("click", () => {
+          sendEvent("size_guide_opened", { productId: product.id });
+          if (noteShown) return;
+          noteShown = true;
+          const note = document.createElement("p");
+          note.className = "ctb-size-guide-note";
+          note.textContent = product.fitNote;
+          card.insertBefore(note, guideLink);
+        });
+        card.appendChild(guideLink);
+      }
+    }
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "ctb-add-btn";
+    addBtn.textContent = "Add to cart";
+    if (hasSizes) addBtn.disabled = true;
+    addBtn.addEventListener("click", () => {
+      const variantId = hasSizes ? product.variantIdsBySize[selectedSize] : product.variantId;
+      if (!variantId) return;
+      addProductToCart(variantId, addBtn);
+    });
+    card.appendChild(addBtn);
+
+    return card;
   }
 
   function renderQuickReplies(replies) {
@@ -282,6 +393,36 @@
     }
   }
 
+  let signalPollHandle = null;
+  function startSignalPolling() {
+    if (signalPollHandle) return;
+    // First check mirrors the old fixed-delay pacing; a real signal (not a
+    // canned line) decides whether anything actually happens after that.
+    setTimeout(checkSignal, 5000);
+    signalPollHandle = setInterval(checkSignal, 9000);
+  }
+
+  async function checkSignal() {
+    if (opened || !sessionId) return;
+    let res;
+    try {
+      res = await fetch(api("/api/chat/signal-check"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      });
+    } catch {
+      return;
+    }
+    if (res.status === 204) return;
+    const data = await res.json();
+    hasHistory = true;
+    openChat();
+    appendBubble("agent", data.reply);
+    appendProductCards(data.products);
+    renderQuickReplies(data.quickReplies);
+  }
+
   let sessionPromise = null;
   function ensureSession() {
     if (!sessionPromise) {
@@ -290,7 +431,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            customerId: config.customer?.id || anonymousId(),
+            customerId,
             productHandle: currentProductHandle(),
             sessionId: getStoredSessionId(),
           }),
@@ -299,6 +440,9 @@
         sessionId = data.sessionId;
         setStoredSessionId(sessionId);
 
+        if (data.profile?.firstName) {
+          headerTitle.textContent = `Hi, ${data.profile.firstName} 👋`;
+        }
         if (data.cart?.totalQuantity > 0) showCartBar(data.cart);
 
         if (data.history?.length) {
@@ -308,14 +452,8 @@
             if (turn.products?.length) appendProductCards(turn.products);
           }
           if (getStoredOpenState()) openChat();
-        } else if (getStoredOpenState()) {
-          // No real conversation yet, but the panel was open (they'd seen the
-          // proactive greeting) when they navigated — restore it immediately
-          // instead of making them wait through the timer again.
-          triggerProactiveGreeting();
-        } else {
-          setTimeout(triggerProactiveGreeting, 5000);
         }
+        startSignalPolling();
 
         return sessionId;
       })();
@@ -344,12 +482,13 @@
       hideThinking();
     }
 
+    hasHistory = true;
     appendBubble("agent", data.reply);
     appendProductCards(data.products);
     renderQuickReplies(data.quickReplies);
   }
 
-  async function addProductToCart(product, btn) {
+  async function addProductToCart(variantId, btn) {
     btn.disabled = true;
     btn.textContent = "Adding…";
     try {
@@ -357,7 +496,7 @@
       const res = await fetch(api("/api/chat/checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, lineItems: [{ variantId: product.variantId, quantity: 1 }] }),
+        body: JSON.stringify({ sessionId, lineItems: [{ variantId, quantity: 1 }] }),
       });
       const cart = await res.json();
       btn.textContent = "Added ✓";
@@ -374,28 +513,9 @@
     cartBar.hidden = false;
   }
 
-  const PROACTIVE_GREETING = "Hi! Looking for anything in particular today?";
-  const PROACTIVE_QUICK_REPLIES = ["Show me bestsellers", "I need a gift", "Just browsing"];
+  cartLink.addEventListener("click", () => sendEvent("checkout_opened", {}));
 
-  function triggerProactiveGreeting() {
-    if (opened) return;
-    openChat();
-    appendBubble("agent", PROACTIVE_GREETING);
-    renderQuickReplies(PROACTIVE_QUICK_REPLIES);
-  }
-
-  launcher.addEventListener("click", () => {
-    // A fresh page load starts `opened` at false even when a real
-    // conversation already exists (it was just replayed into a closed
-    // panel) — only the canned greeting path should check `opened` itself;
-    // an existing conversation should just reopen, not get a second,
-    // out-of-place "Hi! Looking for anything today?" appended after it.
-    if (opened || hasHistory) {
-      openChat();
-    } else {
-      triggerProactiveGreeting();
-    }
-  });
+  launcher.addEventListener("click", () => openChat());
   closeBtn.addEventListener("click", closeChat);
 
   form.addEventListener("submit", async (e) => {

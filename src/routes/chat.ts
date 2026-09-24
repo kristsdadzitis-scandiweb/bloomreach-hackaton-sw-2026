@@ -11,7 +11,7 @@ import {
 } from "../integrations/shopify.js";
 import { recordCartUpdateEvent, getCustomerProfile, updateCustomerProfile, recordEvent } from "../integrations/bloomreach.js";
 import { evaluateSignalCase } from "../services/signals.js";
-import type { ChatSession, MiaCandidate, ProductPageContext } from "../types.js";
+import type { ChatSession } from "../types.js";
 import { newSessionBehavior } from "../types.js";
 
 /**
@@ -22,17 +22,6 @@ import { newSessionBehavior } from "../types.js";
 export const chatRouter = Router();
 
 const sessions = new Map<string, ChatSession>();
-
-function candidateToProductCard(candidate: MiaCandidate): ProductPageContext {
-  return {
-    handle: candidate.id,
-    title: candidate.name,
-    priceRange: candidate.price,
-    available: candidate.sizesInStock.length > 0,
-    variantId: candidate.variantId,
-    image: candidate.image,
-  };
-}
 
 /** Real Bloomreach read — resolves whether this customer is genuinely known, never a guess. */
 async function resolveIdentity(session: ChatSession): Promise<void> {
@@ -123,13 +112,13 @@ chatRouter.post("/message", async (req, res) => {
   session.behavior.lastActivityAt = new Date().toISOString();
 
   const { response, ground } = await runMiaTurn(session, message);
-  const products = ground.candidates.filter((c) => response.reply.show.includes(c.id)).map(candidateToProductCard);
+  const products = ground.candidates.filter((c) => response.reply.show.includes(c.id) && c.available);
 
   session.history.push({
     role: "agent",
     message: response.reply.text,
     timestamp: new Date().toISOString(),
-    products: products.filter((p) => p.available && p.variantId),
+    products,
   });
 
   res.json({ reply: response.reply.text, products, quickReplies: response.reply.chips, decision: response.decision });
@@ -148,12 +137,12 @@ chatRouter.post("/signal-check", async (req, res) => {
     return res.status(204).end();
   }
 
-  const products = ground.candidates.filter((c) => response.reply.show.includes(c.id)).map(candidateToProductCard);
+  const products = ground.candidates.filter((c) => response.reply.show.includes(c.id) && c.available);
   session.history.push({
     role: "agent",
     message: response.reply.text,
     timestamp: new Date().toISOString(),
-    products: products.filter((p) => p.available && p.variantId),
+    products,
   });
 
   res.json({ reply: response.reply.text, products, quickReplies: response.reply.chips, decision: response.decision });
