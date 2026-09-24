@@ -562,10 +562,19 @@
   async function performSignalCheck(force) {
     let res;
     try {
+      // keepalive matters here specifically: a real browsing session (moving
+      // between product pages every several seconds, e.g. to build up the
+      // comparison_stall pattern) navigates away constantly, and a Gemini
+      // round-trip routinely takes longer than that. Without keepalive, the
+      // browser aborts this fetch mid-flight the instant the page unloads —
+      // confirmed live via Cloud Run logs: far more CORS preflights than
+      // completed calls for this exact endpoint (requests dying before the
+      // real POST ever lands), which is what "unreliable" actually was.
       res = await fetch(api("/api/chat/signal-check"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId }),
+        keepalive: true,
       });
     } catch {
       if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
@@ -613,6 +622,7 @@
             productHandle: currentProductHandle(),
             sessionId: getStoredSessionId(),
           }),
+          keepalive: true,
         });
         const data = await res.json();
         sessionId = data.sessionId;
@@ -658,6 +668,7 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId, message }),
+      keepalive: true,
     });
   }
 
@@ -705,6 +716,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, lineItems: [{ variantId, quantity: 1 }] }),
+        keepalive: true,
       });
       const cart = await res.json();
       btn.textContent = "Added ✓";
