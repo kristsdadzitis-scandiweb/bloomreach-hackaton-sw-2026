@@ -160,6 +160,35 @@ cart updates, same event/instant as the Bloomreach write, fire-and-forget. Block
 getting a real Databricks workspace URL + SQL warehouse HTTP path from the user — the
 token alone isn't enough for the app to call the SQL Statement Execution API itself.
 
+# Northbound catalog (Mia demo)
+
+5 real products seeded via Admin API `productSet` in the same dev store, vendor
+`Northbound`, all with real Size options and deliberate stock gaps for the Tier 1
+triggers: `northbound-trailhead-rain-shell` (S/M/L/XL, **M=0** — drives size guide
+reopened + availability block), `northbound-ridgeline-trail-running-shoe` (8/9/10/11,
+**9=0**), `northbound-summit-wool-baselayer` (S/M/L, pairs_with → the shell),
+`northbound-daypack-18l` (single variant, pairs_with → the shell),
+`northbound-merino-socks-2-pack` (single variant, cheap — pairs with the daypack to
+land just under the free-shipping threshold). SKUs: `NB-SHELL-*`, `NB-SHOE-*`,
+`NB-BASE-*`, `NB-DAYPACK`, `NB-SOCKS`.
+
+Attributes: **tags** (`waterproof-<tier>`, `layer-<value>`) for anything
+`search_catalog` filters at the Storefront query level; **`$app`-namespace metafields**
+(`waterproof`, `insulation`, `weight_g`, `fit_note`, `layer`, `pairs_with` as
+`list.product_reference`) for display/reasoning-only data Storefront can't filter on.
+Definitions already created with `access.storefront: PUBLIC_READ` — confirmed the
+`$app` shorthand resolves to this app's real namespace (`app--426201448449`) and reads
+back correctly via the Storefront token, no separate access grant needed per query.
+
+**Real gotcha hit while seeding**: `productSet`-created products are published to
+**zero sales channels** by default — Storefront API returns nothing for them (looks
+identical to a query-syntax bug or indexing lag, it's neither). Fix: `publishablePublish`
+each product to the `Online Store` publication (`gid://shopify/Publication/301830111560`
+on this store — confirmed by checking which publication an existing visible product
+uses, don't assume the ID is stable across stores). If a newly-created product is
+invisible via Storefront API, check `resourcePublicationsCount` on it via Admin API
+before assuming anything else is wrong.
+
 # Shopify access
 
 Unlike Bloomreach/Databricks, this one has **no MCP/interactive-login layer** for the
