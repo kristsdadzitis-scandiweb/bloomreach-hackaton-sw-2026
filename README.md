@@ -48,7 +48,7 @@ npm run dev             # http://localhost:8080
 
 - `GET /` — the mock product page with the proactive chat widget
 - `POST /api/chat/session`, `/message`, `/checkout` — the chat API the widget calls
-- `GET /healthz` — health check
+- `GET /health` — health check
 
 ## Deploying to Cloud Run
 

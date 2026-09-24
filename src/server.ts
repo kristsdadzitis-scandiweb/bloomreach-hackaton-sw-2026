@@ -25,7 +25,10 @@ app.use(
 );
 app.use(express.json());
 
-app.get("/healthz", (_req, res) => res.json({ ok: true }));
+// Not /healthz — Cloud Run's default *.run.app domain reserves paths ending in
+// "z" and answers them with its own 404 at the frontend, before the request
+// ever reaches this container. See CLAUDE.md.
+app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/api/chat", chatRouter);
 

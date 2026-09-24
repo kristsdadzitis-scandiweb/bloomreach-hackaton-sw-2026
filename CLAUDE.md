@@ -330,6 +330,20 @@ misconfiguration — don't spend time re-diagnosing them if they come up again.
 
 Restarting the dev server with `pkill ... ; (nohup npm run dev ...)` in the *same* bash
 call frequently reports an ambiguous "Exit code 144" even when the server actually starts
-fine. Don't treat that exit code as a real failure — `curl http://localhost:8080/healthz`
+fine. Don't treat that exit code as a real failure — `curl http://localhost:8080/health`
 to check the truth, and if it's down, just retry the bare `(nohup npm run dev > ... &)`
 on its own (no `pkill` in the same call) rather than debugging the exit code itself.
+
+# Cloud Run gotcha: never verify a live deploy with the health route
+
+The health endpoint is `/health`, not `/healthz` — it used to be `/healthz` and was
+silently broken in production the entire time, without ever causing a visible problem,
+because of a real, documented Cloud Run platform quirk: the default `*.run.app` domain
+reserves paths ending in `z` and answers them with Google's own frontend 404 page
+*before the request ever reaches the container* — confirmed live this session (`curl
+.../healthz` on the deployed service returned a Google-branded HTML 404 with no trace of
+this app, while `/`, `/widget.js`, and every real `/api/chat/*` route on the exact same
+revision returned 200 normally). Locally this never showed up, since there's no Google
+frontend in front of `localhost`. **Never use `/health` (or anything else ending in `z`)
+to confirm a Cloud Run deploy is actually serving** — hit a real functional route instead
+(e.g. `POST /api/chat/session`), or the "deploy succeeded" check itself will lie.
