@@ -402,8 +402,12 @@
     signalPollHandle = setInterval(checkSignal, 9000);
   }
 
-  async function checkSignal() {
-    if (opened || !sessionId) return;
+  // `force` = the shopper deliberately clicked the launcher, as opposed to a
+  // background poll. A background poll must never interrupt an open panel;
+  // a deliberate open has nothing to interrupt and should never come back
+  // empty, even if the backend has no proactive trigger to fire on.
+  async function checkSignal(force) {
+    if (!sessionId || (!force && opened)) return;
     let res;
     try {
       res = await fetch(api("/api/chat/signal-check"), {
@@ -412,9 +416,13 @@
         body: JSON.stringify({ sessionId }),
       });
     } catch {
+      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
       return;
     }
-    if (res.status === 204) return;
+    if (res.status === 204) {
+      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
+      return;
+    }
     const data = await res.json();
     hasHistory = true;
     openChat();
@@ -515,7 +523,17 @@
 
   cartLink.addEventListener("click", () => sendEvent("checkout_opened", {}));
 
-  launcher.addEventListener("click", () => openChat());
+  launcher.addEventListener("click", async () => {
+    if (hasHistory) {
+      // Real conversation already exists (possibly still hidden after a
+      // page reload) — just reveal it, no need to fetch anything new.
+      openChat();
+      return;
+    }
+    openChat();
+    await ensureSession();
+    await checkSignal(true);
+  });
   closeBtn.addEventListener("click", closeChat);
 
   form.addEventListener("submit", async (e) => {

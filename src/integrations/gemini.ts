@@ -409,6 +409,14 @@ export async function chatWithMia(session: ChatSession, latestMessage: string | 
   }));
   if (latestMessage) {
     contents.push({ role: "user", parts: [{ text: latestMessage }] });
+  } else if (contents.length === 0) {
+    // A proactive signal-check on a brand-new session has no history and no
+    // customer message — Gemini rejects a genuinely empty `contents` array
+    // outright ("contents is not specified"), so this needs a real anchor.
+    contents.push({
+      role: "user",
+      parts: [{ text: "(Proactive check — no customer message yet. Decide from the context block and signal case below whether to speak at all.)" }],
+    });
   }
 
   const toolResult = await runMiaToolLoop(contents, SYSTEM_PROMPT, session);

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response, type NextFunction, type RequestHandler } from "express";
 import { randomUUID } from "node:crypto";
 import { chatWithMia, type MiaTurnResult } from "../integrations/gemini.js";
 import {
@@ -22,6 +22,26 @@ import { newSessionBehavior } from "../types.js";
 export const chatRouter = Router();
 
 const sessions = new Map<string, ChatSession>();
+
+/**
+ * Express doesn't route a rejected promise from an async handler to error
+ * middleware on its own — it becomes an unhandled rejection, which crashes
+ * the whole process (all sessions, every visitor, since this is one Node
+ * instance). One bad Shopify/Gemini/Bloomreach call from a single customer
+ * must never take the app down for everyone else — every route is wrapped.
+ */
+function asyncHandler(handler: (req: Request, res: Response) => Promise<unknown>): RequestHandler {
+  return (req, res, next: NextFunction) => {
+    handler(req, res).catch((err) => {
+      console.error(`[chat] ${req.path} failed:`, err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "internal error" });
+      } else {
+        next(err);
+      }
+    });
+  };
+}
 
 /** Real Bloomreach read — resolves whether this customer is genuinely known, never a guess. */
 async function resolveIdentity(session: ChatSession): Promise<void> {
@@ -55,7 +75,7 @@ async function runMiaTurn(session: ChatSession, latestMessage: string | undefine
   return result;
 }
 
-chatRouter.post("/session", async (req, res) => {
+chatRouter.post("/session", asyncHandler(async (req, res) => {
   const { customerId, productHandle, sessionId: existingSessionId } = req.body as {
     customerId?: string;
     productHandle?: string;
@@ -99,9 +119,9 @@ chatRouter.post("/session", async (req, res) => {
     identityTier: session.identityTier,
     profile: session.profile ?? null,
   });
-});
+}));
 
-chatRouter.post("/message", async (req, res) => {
+chatRouter.post("/message", asyncHandler(async (req, res) => {
   const { sessionId, message } = req.body as { sessionId: string; message: string };
   const session = sessions.get(sessionId);
   if (!session) {
@@ -122,10 +142,10 @@ chatRouter.post("/message", async (req, res) => {
   });
 
   res.json({ reply: response.reply.text, products, quickReplies: response.reply.chips, decision: response.decision });
-});
+}));
 
 /** The playbook's signal-driven proactive turn — server-evaluated instead of a fixed client timer. */
-chatRouter.post("/signal-check", async (req, res) => {
+chatRouter.post("/signal-check", asyncHandler(async (req, res) => {
   const { sessionId } = req.body as { sessionId: string };
   const session = sessions.get(sessionId);
   if (!session) {
@@ -146,10 +166,10 @@ chatRouter.post("/signal-check", async (req, res) => {
   });
 
   res.json({ reply: response.reply.text, products, quickReplies: response.reply.chips, decision: response.decision });
-});
+}));
 
 /** Widget-reported behavior — local session state for trigger detection, separate from the model's own write_back. */
-chatRouter.post("/event", (req, res) => {
+chatRouter.post("/event", asyncHandler(async (req, res) => {
   const { sessionId, event, properties } = req.body as {
     sessionId: string;
     event: string;
@@ -205,9 +225,9 @@ chatRouter.post("/event", (req, res) => {
   }
 
   res.json({ ok: true });
-});
+}));
 
-chatRouter.post("/checkout", async (req, res) => {
+chatRouter.post("/checkout", asyncHandler(async (req, res) => {
   const { sessionId, lineItems } = req.body as {
     sessionId: string;
     lineItems: Array<{ variantId: string; quantity: number }>;
@@ -228,9 +248,9 @@ chatRouter.post("/checkout", async (req, res) => {
   await recordCartUpdateEvent(session.customerId, cart);
 
   res.json(cart);
-});
+}));
 
-chatRouter.post("/login", async (req, res) => {
+chatRouter.post("/login", asyncHandler(async (req, res) => {
   const { sessionId } = req.body as { sessionId: string };
   const session = sessions.get(sessionId);
   if (!session) {
@@ -255,9 +275,9 @@ chatRouter.post("/login", async (req, res) => {
   }
 
   res.json({ loggedIn: true, name: profile.firstName, email: profile.email });
-});
+}));
 
-chatRouter.post("/logout", async (req, res) => {
+chatRouter.post("/logout", asyncHandler(async (req, res) => {
   const { sessionId } = req.body as { sessionId: string };
   const session = sessions.get(sessionId);
   if (!session) {
@@ -273,4 +293,4 @@ chatRouter.post("/logout", async (req, res) => {
   session.profile = undefined;
 
   res.json({ loggedIn: false });
-});
+}));

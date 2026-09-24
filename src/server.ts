@@ -40,6 +40,25 @@ const handleCorsRejection: ErrorRequestHandler = (err, _req, res, next) => {
 };
 app.use(handleCorsRejection);
 
+// Final safety net — every chatRouter route already catches its own errors
+// (see asyncHandler in routes/chat.ts), but this catches anything else
+// (a future route added without that wrapper, a sync throw, etc.) rather
+// than letting Express's default handler behavior surprise us.
+const handleUnexpectedError: ErrorRequestHandler = (err, _req, res, _next) => {
+  console.error("[server] unhandled error:", err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: "internal error" });
+  }
+};
+app.use(handleUnexpectedError);
+
+// One customer's request must never take the whole app down for everyone
+// else — this is a single process serving every session in memory. Every
+// route is already wrapped (asyncHandler), so reaching this is itself a
+// bug, but the alternative (letting Node exit) is strictly worse.
+process.on("uncaughtException", (err) => console.error("[server] uncaughtException:", err));
+process.on("unhandledRejection", (err) => console.error("[server] unhandledRejection:", err));
+
 app.listen(config.port, () => {
   console.log(`chat-to-buy listening on :${config.port}`);
 });
