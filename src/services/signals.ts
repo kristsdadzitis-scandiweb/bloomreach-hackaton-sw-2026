@@ -50,6 +50,35 @@ const CART_IDLE_MS = 90_000;
 const SIZE_GUIDE_REOPEN_THRESHOLD = 2;
 const COMPARISON_STALL_WINDOW_MS = 10 * 60_000;
 const COMPARISON_STALL_MIN_PRODUCTS = 3;
+/**
+ * Some categories in the real catalog never have 3 products at all —
+ * confirmed live via searchCatalog: baselayer has 2, midlayer has 1, pants
+ * has 2 (jacket/footwear/accessory are all comfortably above 3). A flat
+ * threshold of 3 made comparison_stall mathematically unreachable in those
+ * categories, no matter how much a shopper genuinely compared the options
+ * that do exist — not a "not stalled yet" case, a "can never fire" one.
+ * This only lowers the bar for categories that are actually this small; it
+ * deliberately does not touch the default for everything else, since 2
+ * views in a large category (jackets, footwear) isn't yet a real stall.
+ * Revisit if the catalog's category sizes change.
+ */
+const COMPARISON_STALL_MIN_PRODUCTS_BY_CATEGORY: Record<string, number> = {
+  baselayer: 2,
+  midlayer: 2,
+  pants: 2,
+};
+/**
+ * Two different triggers can both go genuinely true within moments of each
+ * other — e.g. the background poll finds cart_left_behind the instant an
+ * event-triggered recheck (from clicking an out-of-stock size) also fires.
+ * `runExclusive` in chat.ts already stops them from running concurrently and
+ * `triggersFiredThisSession` stops the *same* trigger firing twice, but
+ * nothing previously stopped two *different* triggers from speaking
+ * back-to-back a few seconds apart, which reads as spammy rather than
+ * proactive. This gate only applies to proactive (signal-driven) turns — a
+ * direct reply to something the shopper just typed must never be delayed.
+ */
+const MIN_PROACTIVE_SPEAK_GAP_MS = 15_000;
 
 function holdBack(alsoTrue: string[], quietRulesInForce: string[]): SignalCase {
   return {
@@ -73,11 +102,30 @@ function holdBack(alsoTrue: string[], quietRulesInForce: string[]): SignalCase {
  * id search_catalog's own `pairs_with` filter expects) — this layer has no
  * Shopify access itself, so the caller resolves it before calling in.
  */
-export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: string[] = []): SignalCase {
+export function evaluateSignalCase(
+  session: ChatSession,
+  unmatchedPairsWith: string[] = [],
+  isProactive = false,
+): SignalCase {
   const { behavior } = session;
   const alreadyFired = new Set(behavior.triggersFiredThisSession);
   const alsoTrue: string[] = [];
   const quietRulesInForce: string[] = [];
+
+  // 0. Quiet gap: a proactive turn arriving too soon after Mia's last
+  // proactive turn defers to hold_back regardless of which trigger would
+  // otherwise fire — the trigger itself doesn't go stale from waiting a few
+  // more seconds (cart_left_behind/comparison_stall recompute their own
+  // real elapsed time next check; a per-SKU/per-product firedKey isn't
+  // consumed by this path since nothing below ever runs). A direct reply to
+  // a customer message always skips this — isProactive is false there.
+  if (isProactive && behavior.lastProactiveSpokeAt) {
+    const sinceLastSpokeMs = Date.now() - new Date(behavior.lastProactiveSpokeAt).getTime();
+    if (sinceLastSpokeMs < MIN_PROACTIVE_SPEAK_GAP_MS) {
+      quietRulesInForce.push(`spoke ${Math.round(sinceLastSpokeMs / 1000)}s ago — waiting out the ${MIN_PROACTIVE_SPEAK_GAP_MS / 1000}s quiet gap before another proactive message`);
+      return holdBack(alsoTrue, quietRulesInForce);
+    }
+  }
 
   // 1. Size guide reopened: same product's size guide opened enough times,
   // with no add-to-cart for it yet.
@@ -173,7 +221,8 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
   }
   for (const [category, ids] of byCategory) {
     const firedKey = `comparison_stall:${category}`;
-    if (ids.size >= COMPARISON_STALL_MIN_PRODUCTS && !session.cartId && !alreadyFired.has(firedKey)) {
+    const minProducts = COMPARISON_STALL_MIN_PRODUCTS_BY_CATEGORY[category] ?? COMPARISON_STALL_MIN_PRODUCTS;
+    if (ids.size >= minProducts && !session.cart?.totalQuantity && !alreadyFired.has(firedKey)) {
       return {
         trigger: "comparison_stall",
         firedKey,
@@ -181,7 +230,7 @@ export function evaluateSignalCase(session: ChatSession, unmatchedPairsWith: str
         evidence: [
           `${ids.size} distinct ${category} products viewed within 10 minutes: ${[...ids].join(", ")}`,
           "cart is still empty — undecided, not blocked",
-          "this rule already requires 3+ distinct products in one category with no cart add — that pattern alone is the stall, regardless of how long any single view lasted; do not additionally judge dwell time or second-guess this as \"too quick to be real\"",
+          `this rule already requires ${minProducts}+ distinct products in one category with no cart add (${category} only has a handful of real options, so the bar is lower here than in a bigger category) — that pattern alone is the stall, regardless of how long any single view lasted; do not additionally judge dwell time or second-guess this as \"too quick to be real\"`,
           "ask which of price, weight or waterproofing matters most, never guess the criterion",
         ],
         alsoTrue,

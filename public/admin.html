@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mia — reasoning log</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, sans-serif; background: #f5f6f4; color: #1a1a1a;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    background: #1e3a2f; color: #fff; padding: 10px 16px; display: flex; align-items: center;
+    gap: 12px; flex-wrap: wrap; flex-shrink: 0;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 700; white-space: nowrap; }
+  header .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  header input[type="password"], header input[type="text"] {
+    padding: 5px 8px; border-radius: 6px; border: none; font-size: 12.5px; width: 180px;
+  }
+  header button {
+    padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.4); background: transparent;
+    color: #fff; cursor: pointer; font-size: 12.5px;
+  }
+  header button:hover { background: rgba(255,255,255,0.12); }
+  header label { font-size: 12.5px; display: flex; align-items: center; gap: 4px; }
+  #status { font-size: 12px; opacity: 0.85; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #sessions {
+    width: 280px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid #ddd; background: #fff;
+  }
+  #sessions .session-item {
+    padding: 10px 12px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 12.5px;
+  }
+  #sessions .session-item:hover { background: #f0f4f1; }
+  #sessions .session-item.selected { background: #e2ede6; border-left: 3px solid #1e3a2f; }
+  #sessions .session-item .sid { font-weight: 700; font-family: monospace; font-size: 11.5px; }
+  #sessions .session-item .meta { color: #666; margin-top: 3px; }
+  #sessions .session-item .triggers { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 3px; }
+  #sessions .tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #dde7e1; color: #1e3a2f;
+  }
+  #logs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .empty-note { color: #777; font-size: 13px; padding: 20px; text-align: center; }
+  /* flex-shrink: 0 matters here, not just cosmetic — .log-entry is a flex
+     child of #logs (column direction) with its own overflow:hidden (for the
+     rounded-corner clip below), which collapses its effective min-height to
+     0. Without an explicit flex-shrink:0, once accumulated entries overflow
+     the viewport, flexbox's default shrink behavior squeezes every card
+     shorter instead of the container just scrolling — worse the more piled
+     up, which is exactly the "cards get compressed" symptom reported live. */
+  .log-entry { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden; flex-shrink: 0; }
+  .log-entry summary {
+    padding: 9px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12.5px; list-style: none;
+  }
+  .log-entry summary::-webkit-details-marker { display: none; }
+  .log-entry .time { color: #888; font-family: monospace; font-size: 11.5px; white-space: nowrap; }
+  .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .badge.action-open_chat { background: #1e3a2f; color: #fff; }
+  .badge.action-stay_closed { background: #eee; color: #888; }
+  .badge.action-continue { background: #d6e8f5; color: #1a4d73; }
+  .badge.trigger { background: #fff2d9; color: #8a5a00; border: 1px solid #f0d9a0; }
+  .badge.trigger.hold_back { background: #f0f0f0; color: #999; border-color: #ddd; }
+  .badge.kind { background: #f0f0f0; color: #555; }
+  .log-entry .reply-preview { color: #444; flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-entry .duration { color: #aaa; font-size: 11px; margin-left: auto; }
+  .log-body { padding: 0 14px 14px; font-size: 12.5px; border-top: 1px solid #f0f0f0; }
+  .log-body h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #888; margin: 12px 0 4px; }
+  .log-body ul { margin: 0; padding-left: 18px; }
+  .log-body li { margin-bottom: 2px; }
+  .log-body .kv { display: flex; gap: 6px; }
+  .log-body .kv .k { color: #888; min-width: 90px; }
+  .log-body pre.reply-text {
+    white-space: pre-wrap; background: #f6f6f6; border-radius: 6px; padding: 8px 10px; margin: 4px 0;
+    font-family: inherit; font-size: 12.5px;
+  }
+  .chip-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip-list span { background: #eef3f0; border-radius: 999px; padding: 3px 9px; font-size: 11.5px; }
+  code.small { font-size: 11px; background: #f0f0f0; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Mia — reasoning log</h1>
+    <div class="controls">
+      <input id="token" type="password" placeholder="admin token" autocomplete="off">
+      <button id="connect">Connect</button>
+      <label><input type="checkbox" id="auto" checked> auto-refresh (4s)</label>
+      <button id="refresh">Refresh now</button>
+      <span id="status"></span>
+    </div>
+  </header>
+  <main>
+    <aside id="sessions"><div class="empty-note">Connect to load sessions.</div></aside>
+    <section id="logs"><div class="empty-note">Connect to load the reasoning log.</div></section>
+  </main>
+
+<script>
+(function () {
+  const tokenInput = document.getElementById("token");
+  const connectBtn = document.getElementById("connect");
+  const autoCheckbox = document.getElementById("auto");
+  const refreshBtn = document.getElementById("refresh");
+  const statusEl = document.getElementById("status");
+  const sessionsEl = document.getElementById("sessions");
+  const logsEl = document.getElementById("logs");
+
+  const STORAGE_KEY = "mia-admin-token";
+  let token = "";
+  let selectedSessionId = null; // null = all sessions
+  let pollHandle = null;
+  let openEntryIds = new Set(); // preserve which <details> are expanded across refreshes
+
+  function loadStoredToken() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("token")) return params.get("token") || "";
+      return localStorage.getItem(STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  }
+  function storeToken(t) {
+    try { localStorage.setItem(STORAGE_KEY, t); } catch {}
+  }
+
+  function setStatus(text, isError) {
+    statusEl.textContent = text;
+    statusEl.style.color = isError ? "#ffb4b4" : "rgba(255,255,255,0.85)";
+  }
+
+  async function apiGet(path) {
+    const res = await fetch(path, { headers: { "x-admin-token": token } });
+    if (res.status === 401) throw new Error("unauthorized — check the admin token");
+    if (res.status === 503) throw new Error("admin panel disabled server-side — set ADMIN_PANEL_TOKEN");
+    if (!res.ok) throw new Error(`request failed: ${res.status}`);
+    return res.json();
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return "—";
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 1000) return "just now";
+    if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
+    if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+    return `${Math.round(ms / 3_600_000)}h ago`;
+  }
+
+  function shortId(id) {
+    return id ? id.slice(0, 8) : "—";
+  }
+
+  function renderSessions(sessions) {
+    if (!sessions.length) {
+      sessionsEl.innerHTML = '<div class="empty-note">No sessions yet.</div>';
+      return;
+    }
+    const allItem = `
+      <div class="session-item ${selectedSessionId === null ? "selected" : ""}" data-session="">
+        <div class="sid">All sessions</div>
+        <div class="meta">${sessions.length} active</div>
+      </div>`;
+    const items = sessions.map((s) => {
+      const cart = s.cart ? `${s.cart.totalQuantity} item(s) · ${s.cart.totalAmount}` : "empty cart";
+      const triggers = (s.triggersFiredThisSession || [])
+        .map((t) => `<span class="tag">${escapeHtml(t)}</span>`)
+        .join("");
+      return `
+        <div class="session-item ${selectedSessionId === s.sessionId ? "selected" : ""}" data-session="${s.sessionId}">
+          <div class="sid">${shortId(s.sessionId)} · ${escapeHtml(s.customerId)}</div>
+          <div class="meta">${s.identityTier} · ${s.historyLength} turns · ${cart} · ${timeAgo(s.lastActivityAt)}</div>
+          ${triggers ? `<div class="triggers">${triggers}</div>` : ""}
+        </div>`;
+    });
+    sessionsEl.innerHTML = allItem + items.join("");
+    sessionsEl.querySelectorAll(".session-item").forEach((el) => {
+      el.addEventListener("click", () => {
+        selectedSessionId = el.dataset.session || null;
+        renderSessions(sessions);
+        loadLogs();
+      });
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function actionBadge(action) {
+    return `<span class="badge action-${action}">${action}</span>`;
+  }
+
+  function triggerBadge(trigger) {
+    return `<span class="badge trigger ${trigger === "hold_back" ? "hold_back" : ""}">${trigger}</span>`;
+  }
+
+  function renderLogEntry(log) {
+    const open = openEntryIds.has(log.id) ? "open" : "";
+    const kind = log.isProactive ? "proactive" : "direct reply";
+    const declinedButFired = log.signalCase.trigger !== "hold_back" && log.decision.action !== "open_chat";
+    const rejectedList = (log.decision.rejected || [])
+      .map((r) => `<li><strong>${escapeHtml(r.reading)}</strong> — ${escapeHtml(r.why)}</li>`)
+      .join("");
+    const evidenceList = (log.signalCase.evidence || []).map((e) => `<li>${escapeHtml(e)}</li>`).join("");
+    const alsoTrueList = (log.signalCase.alsoTrue || []).map((e) => `<li>${escapeHtml(e)}</li>`).join("");
+    const quietRulesList = (log.signalCase.quietRulesInForce || []).map((e) => `<li>${escapeHtml(e)}</li>`).join("");
+    const chips = (log.chips || []).map((c) => `<span>${escapeHtml(c)}</span>`).join("");
+    const writes = log.bloomreachWrites || [];
+    const anyWriteFailed = writes.some((w) => w.failed);
+    const profileEntries = log.profile ? Object.entries(log.profile).filter(([, v]) => v !== undefined && v !== null) : [];
+    const violations = log.violations || [];
+
+    return `
+      <details class="log-entry" data-id="${log.id}" ${open}>
+        <summary>
+          <span class="time">${new Date(log.timestamp).toLocaleTimeString()}</span>
+          ${triggerBadge(log.signalCase.trigger)}
+          ${actionBadge(log.decision.action)}
+          <span class="badge kind">${kind}</span>
+          ${declinedButFired ? '<span class="badge trigger" style="background:#ffe3e3;color:#a33;border-color:#f2b8b8;">rule fired, held back</span>' : ""}
+          ${anyWriteFailed ? '<span class="badge trigger" style="background:#ffe3e3;color:#a33;border-color:#f2b8b8;">Bloomreach write failed</span>' : ""}
+          ${violations.length ? `<span class="badge trigger" style="background:#fff0cc;color:#8a5a00;border-color:#f0d9a0;">guardrail caught ${violations.length}</span>` : ""}
+          ${writes.length && !anyWriteFailed ? `<span class="badge kind" style="background:#e2ede6;color:#1e3a2f;">Bloomreach ×${writes.length}</span>` : ""}
+          <span class="reply-preview">${escapeHtml(log.customerMessage ? `“${log.customerMessage}”` : log.replyText || log.decision.readAs)}</span>
+          <span class="duration">${log.durationMs}ms</span>
+        </summary>
+        <div class="log-body">
+          <div class="kv"><span class="k">Session</span><code class="small">${escapeHtml(log.sessionId)}</code></div>
+          <div class="kv"><span class="k">Customer</span><code class="small">${escapeHtml(log.customerId)}</code> (${escapeHtml(log.identityTier)})</div>
+          ${log.customerMessage ? `<h4>Customer said</h4><pre class="reply-text">${escapeHtml(log.customerMessage)}</pre>` : ""}
+
+          <h4>Signal case</h4>
+          <div class="kv"><span class="k">Trigger</span>${escapeHtml(log.signalCase.trigger)} <code class="small">${escapeHtml(log.signalCase.firedKey)}</code></div>
+          ${evidenceList ? `<div class="kv"><span class="k">Evidence</span><ul>${evidenceList}</ul></div>` : ""}
+          ${alsoTrueList ? `<div class="kv"><span class="k">Also true</span><ul>${alsoTrueList}</ul></div>` : ""}
+          ${quietRulesList ? `<div class="kv"><span class="k">Quiet rules</span><ul>${quietRulesList}</ul></div>` : ""}
+
+          <h4>Mia's decision</h4>
+          <div class="kv"><span class="k">Action</span>${actionBadge(log.decision.action)}</div>
+          <div class="kv"><span class="k">Read as</span>${escapeHtml(log.decision.readAs)}</div>
+          <div class="kv"><span class="k">Confidence</span>${escapeHtml(log.decision.confidence)}</div>
+          ${rejectedList ? `<div class="kv"><span class="k">Rejected</span><ul>${rejectedList}</ul></div>` : ""}
+          ${log.decision.offer && log.decision.offer.type !== "none" ? `<div class="kv"><span class="k">Offer</span>${escapeHtml(log.decision.offer.type)} — ${escapeHtml(log.decision.offer.why)}</div>` : ""}
+
+          ${log.replyText ? `<h4>Reply sent</h4><pre class="reply-text">${escapeHtml(log.replyText)}</pre>` : ""}
+          ${chips ? `<h4>Chips offered</h4><div class="chip-list">${chips}</div>` : ""}
+
+          <h4>Ground state at decision time</h4>
+          <div class="kv"><span class="k">Cart</span>${log.cart ? `${log.cart.totalQuantity} item(s), ${log.cart.totalAmount}` : "empty / unknown"}</div>
+          <div class="kv"><span class="k">pendingCartAdds</span>${log.pendingCartAddsCount}</div>
+
+          ${
+            violations.length
+              ? `<h4>Guardrail violations</h4><div class="kv"><ul>${violations
+                  .map((v) => `<li style="color:#8a5a00;">${escapeHtml(v)}</li>`)
+                  .join("")}</ul></div>`
+              : ""
+          }
+
+          <h4>Bloomreach</h4>
+          <div class="kv"><span class="k">Profile read</span>${
+            profileEntries.length
+              ? profileEntries.map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(JSON.stringify(v))}`).join(", ")
+              : "none (anonymous — no properties on file)"
+          }</div>
+          ${
+            writes.length
+              ? `<div class="kv"><span class="k">Writes this turn</span><ul>${writes
+                  .map(
+                    (w) =>
+                      `<li><code class="small">${escapeHtml(w.source)}</code> <strong>${escapeHtml(w.event)}</strong> ${escapeHtml(JSON.stringify(w.properties))} — ${
+                        w.failed
+                          ? `<span style="color:#a33;font-weight:700;">FAILED${w.error ? `: ${escapeHtml(w.error)}` : ""}</span>`
+                          : '<span style="color:#1e7a3a;">ok</span>'
+                      }</li>`,
+                  )
+                  .join("")}</ul></div>`
+              : `<div class="kv"><span class="k">Writes this turn</span>none</div>`
+          }
+        </div>
+      </details>`;
+  }
+
+  function renderLogs(logs) {
+    if (!logs.length) {
+      logsEl.innerHTML = '<div class="empty-note">No turns logged yet for this filter.</div>';
+      return;
+    }
+    logsEl.innerHTML = logs.map(renderLogEntry).join("");
+    logsEl.querySelectorAll(".log-entry").forEach((el) => {
+      el.addEventListener("toggle", () => {
+        if (el.open) openEntryIds.add(el.dataset.id);
+        else openEntryIds.delete(el.dataset.id);
+      });
+    });
+  }
+
+  async function loadSessions() {
+    const data = await apiGet("/api/chat/admin/sessions");
+    renderSessions(data.sessions || []);
+  }
+
+  async function loadLogs() {
+    const qs = selectedSessionId ? `?sessionId=${encodeURIComponent(selectedSessionId)}&limit=200` : "?limit=200";
+    const data = await apiGet(`/api/chat/admin/logs${qs}`);
+    renderLogs(data.logs || []);
+  }
+
+  async function refreshAll() {
+    try {
+      await Promise.all([loadSessions(), loadLogs()]);
+      setStatus(`connected — last updated ${new Date().toLocaleTimeString()}`, false);
+    } catch (err) {
+      setStatus(err.message || "request failed", true);
+      stopPolling();
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    refreshAll();
+    if (autoCheckbox.checked) {
+      pollHandle = setInterval(refreshAll, 4000);
+    }
+  }
+  function stopPolling() {
+    if (pollHandle) clearInterval(pollHandle);
+    pollHandle = null;
+  }
+
+  connectBtn.addEventListener("click", () => {
+    token = tokenInput.value.trim();
+    storeToken(token);
+    startPolling();
+  });
+  refreshBtn.addEventListener("click", refreshAll);
+  autoCheckbox.addEventListener("change", () => {
+    if (autoCheckbox.checked) startPolling();
+    else stopPolling();
+  });
+  tokenInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") connectBtn.click();
+  });
+
+  token = loadStoredToken();
+  tokenInput.value = token;
+  if (token) startPolling();
+})();
+</script>
+</body>
+</html>

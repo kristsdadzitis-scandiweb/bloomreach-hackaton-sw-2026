@@ -10,6 +10,8 @@ export interface GroundTruth {
   cartNonEmpty: boolean;
   cartValue: number;
   freeShippingThreshold: number;
+  /** Real variant ids create_cart actually resolved this turn — the only real evidence a cart add was genuinely attempted. Zero here means nothing was actually queued, regardless of what reply.text or writeBack claims. */
+  pendingCartAddsCount: number;
 }
 
 const FREE_SHIPPING_WINDOW = 15;
@@ -54,6 +56,22 @@ export function enforceGuardrails(response: MiaResponse, ground: GroundTruth): {
     openCheckout = false;
   }
 
+  // Found live: Mia can claim "I've added X to your cart" in reply.text —
+  // and even write a matching writeBack event to real Bloomreach data — when
+  // create_cart never actually resolved anything this turn (pendingCartAdds
+  // empty), because nothing previously checked the *fact of a real add*
+  // against a *structured field that names one*. reply.text itself is free
+  // text and can't be reliably rewritten here, but writeBack.event is
+  // structured and exactly the more damaging half of this: a permanent,
+  // false conversion signal on a real customer's profile, not just an
+  // ephemeral wrong sentence in chat. Drop it before it's ever written.
+  let writeBack = response.writeBack;
+  const claimsCartAdd = /add(ed)?[_-]?to[_-]?cart|cart[_-]?updated/i.test(writeBack?.event ?? "");
+  if (claimsCartAdd && ground.pendingCartAddsCount === 0) {
+    violations.push(`dropped writeBack event "${writeBack.event}" — claims a cart add but create_cart resolved nothing real this turn`);
+    writeBack = { event: "", properties: {} };
+  }
+
   let offer = response.decision.offer;
   if (offer.type === "free_shipping") {
     const withinWindow = ground.freeShippingThreshold - ground.cartValue <= FREE_SHIPPING_WINDOW && ground.cartValue <= ground.freeShippingThreshold;
@@ -67,7 +85,7 @@ export function enforceGuardrails(response: MiaResponse, ground: GroundTruth): {
     safe: {
       decision: { ...response.decision, offer },
       reply: { ...response.reply, show, recommendSizes, addToCart, openCheckout },
-      writeBack: response.writeBack,
+      writeBack,
     },
     violations,
   };

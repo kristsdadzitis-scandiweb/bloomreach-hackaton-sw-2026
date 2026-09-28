@@ -33,4 +33,11 @@ export const config = {
     adminToken: required("SHOPIFY_ADMIN_API_TOKEN"),
     apiVersion: required("SHOPIFY_API_VERSION", "2026-01"),
   },
+
+  // The reasoning/troubleshooting log panel (public/admin.html) — separate
+  // name from shopify.adminToken above (a completely unrelated Shopify Admin
+  // API credential) to avoid confusion between the two "admin"s.
+  adminPanel: {
+    token: required("ADMIN_PANEL_TOKEN"),
+  },
 } as const;

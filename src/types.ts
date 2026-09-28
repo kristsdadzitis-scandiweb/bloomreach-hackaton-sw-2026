@@ -11,6 +11,8 @@ export interface ChatTurn {
   timestamp: string;
   /** Product cards shown alongside an agent turn, if search_catalog was called. */
   products?: MiaCandidate[];
+  /** Quick-reply chips offered alongside an agent turn — persisted so a page reload (which wipes the widget's in-memory DOM) can restore the last turn's real options instead of leaving none. */
+  chips?: string[];
 }
 
 export type IdentityTier = "anonymous" | "known" | "just_signed_in";
@@ -67,6 +69,8 @@ export interface SessionBehavior {
   lastActivityAt: string;
   opportunityUsedThisSession: boolean;
   triggersFiredThisSession: string[];
+  /** When Mia last actually spoke a proactive (signal-driven) turn — lets evaluateSignalCase space out two different triggers that both go true within a few seconds of each other, instead of firing back-to-back. Never set by a direct reply to a customer message. */
+  lastProactiveSpokeAt?: string;
 }
 
 export function newSessionBehavior(): SessionBehavior {
@@ -83,14 +87,51 @@ export function newSessionBehavior(): SessionBehavior {
   };
 }
 
+/** One real cart line, for rendering an honest order-summary card and reasoning about complete_the_kit — never fabricated data. */
+export interface CartLineInfo {
+  handle: string;
+  title: string;
+  variantTitle: string;
+  quantity: number;
+  lineTotal: number;
+}
+
+/**
+ * The shopper's real, visible cart — the same one the theme's own cart
+ * drawer/checkout shows, since "Add to cart" now goes straight to the
+ * theme's native `/cart/add.js` instead of a separate Storefront-API cart
+ * the backend created (see CLAUDE.md's "Native cart switch" section for why:
+ * the old approach never showed up in the store's own cart panel at all).
+ * The backend has no session/cookie into that native cart, so this is
+ * populated entirely from what the widget reports after reading `/cart.js`
+ * itself — the backend still resolves the *product* side (handle,
+ * pairs_with) from the real variant ids the client sends, never trusting
+ * anything about product data from the client directly.
+ */
+export interface ClientReportedCart {
+  totalQuantity: number;
+  totalAmount: number;
+  currencyCode: string;
+  lines: CartLineInfo[];
+  lineHandles: string[];
+  unmatchedPairsWith: string[];
+}
+
 export interface ChatSession {
   sessionId: string;
   customerId: string;
   history: ChatTurn[];
-  /** Shopify cart id, once the customer has added a first item this session. */
-  cartId?: string;
-  /** Set once the customer "logs in" (demo login toggle) — attached to their cart. */
-  customerAccessToken?: string;
+  /**
+   * The shopper's real, native cart (the one the theme's own cart drawer and
+   * checkout show) — see ClientReportedCart. Populated by the widget, not
+   * fetched by the backend, since the backend has no browser session into it.
+   * The single cart for everything cart-aware in this app — a product-card
+   * "Add to cart" click and a typed "add this to my cart" message both end
+   * up here, deliberately, after an earlier version kept the two separate
+   * and a real add via conversation silently never showed an order-summary
+   * card at all (see CLAUDE.md's "Native cart switch" section).
+   */
+  cart?: ClientReportedCart;
   customerName?: string;
   /** The real product the customer's current page is showing, if any — full candidate shape so the size guide and Mia's own page-awareness have real sizes/stock/fit note to work with. */
   currentProduct?: MiaCandidate;
@@ -98,12 +139,6 @@ export interface ChatSession {
   /** Populated from a real Bloomreach read — never fixture/fabricated data. */
   profile?: CustomerProfile;
   behavior: SessionBehavior;
-}
-
-/** The cart the agent hands off for checkout. */
-export interface CartHandoff {
-  checkoutUrl: string;
-  lineItems: Array<{ variantId: string; quantity: number }>;
 }
 
 /** A real search_catalog result — every field here must trace back to a Shopify read. */

@@ -64,6 +64,12 @@
     return match ? match[1] : undefined;
   }
 
+  const CURRENCY_SYMBOLS = { EUR: "€", USD: "$", GBP: "£" };
+  function formatMoney(amount, currencyCode) {
+    const symbol = CURRENCY_SYMBOLS[currencyCode];
+    return symbol ? `${symbol}${amount}` : `${amount} ${currencyCode}`;
+  }
+
   // --- styles (namespaced under #chat-to-buy-widget to avoid clashing with the theme) ---
   const style = document.createElement("style");
   style.textContent = `
@@ -132,18 +138,23 @@
       font-size: 12px; padding: 6px 10px; border-radius: 999px; border: 1px solid #ccc; background: #fff; cursor: pointer;
     }
     #ctb-cart-bar {
-      display: flex; align-items: center; justify-content: space-between; gap: 10px;
-      padding: 10px 12px; background: #f6f6f6; border-top: 1px solid #eee; font-size: 13px;
+      padding: 12px; background: #fff; border-top: 1px solid #eee; font-size: 13px;
     }
     #ctb-cart-bar[hidden] { display: none; }
-    #ctb-cart-link {
-      background: #1e3a2f; color: #fff; text-decoration: none; padding: 8px 14px;
-      border-radius: 8px; font-size: 13px; font-weight: 600;
+    #ctb-cart-title { font-size: 13px; font-weight: 700; margin: 0 0 8px; }
+    #ctb-cart-lines { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+    .ctb-cart-line { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; }
+    .ctb-cart-line .ctb-cart-line-name { color: #1a1a1a; }
+    .ctb-cart-line .ctb-cart-line-variant { color: #888; }
+    .ctb-cart-line .ctb-cart-line-price { color: #1a1a1a; white-space: nowrap; }
+    #ctb-cart-total {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding-top: 8px; border-top: 1px solid #eee; margin-bottom: 10px;
+      font-size: 13px; font-weight: 700;
     }
-    #ctb-chat-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eee; }
-    #ctb-input { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }
-    #ctb-chat-form button[type="submit"] {
-      padding: 8px 14px; border-radius: 8px; border: none; background: #1e3a2f; color: #fff; cursor: pointer;
+    #ctb-cart-link {
+      display: block; text-align: center; background: #1e3a2f; color: #fff; text-decoration: none;
+      padding: 12px 14px; border-radius: 10px; font-size: 14px; font-weight: 700;
     }
     #ctb-size-guide-fab {
       position: fixed !important; bottom: 90px !important; right: 20px !important; top: auto !important; left: auto !important;
@@ -177,13 +188,11 @@
       <div id="ctb-log"></div>
       <div id="ctb-quick-replies"></div>
       <div id="ctb-cart-bar" hidden>
-        <span><span id="ctb-cart-count">0</span> item(s) in cart</span>
+        <p id="ctb-cart-title">Your cart</p>
+        <div id="ctb-cart-lines"></div>
+        <div id="ctb-cart-total"><span>Total</span><span id="ctb-cart-total-amount"></span></div>
         <a id="ctb-cart-link" href="#" target="_blank" rel="noopener">Go to checkout</a>
       </div>
-      <form id="ctb-chat-form">
-        <input id="ctb-input" type="text" placeholder="Type a message…" autocomplete="off">
-        <button type="submit">Send</button>
-      </form>
     </div>
   `;
   // Attached to <html> rather than <body> — many OS 2.0 themes (Horizon
@@ -198,11 +207,10 @@
   const closeBtn = root.querySelector("#ctb-close");
   const log = root.querySelector("#ctb-log");
   const quickRepliesEl = root.querySelector("#ctb-quick-replies");
-  const form = root.querySelector("#ctb-chat-form");
-  const input = root.querySelector("#ctb-input");
   const headerTitle = root.querySelector("#ctb-header-title");
   const cartBar = root.querySelector("#ctb-cart-bar");
-  const cartCountEl = root.querySelector("#ctb-cart-count");
+  const cartLinesEl = root.querySelector("#ctb-cart-lines");
+  const cartTotalAmountEl = root.querySelector("#ctb-cart-total-amount");
   const cartLink = root.querySelector("#ctb-cart-link");
   const sizeGuideFab = root.querySelector("#ctb-size-guide-fab");
   const sizeGuidePopover = root.querySelector("#ctb-size-guide-popover");
@@ -224,8 +232,12 @@
   const STORAGE_OPEN_KEY = "chat-to-buy-was-open";
   // How long a "the panel was open" flag stays honored across page loads —
   // past this, treat it as left open from an old session rather than an
-  // active conversation still in progress.
-  const REOPEN_STALE_MS = 2 * 60_000;
+  // active conversation still in progress. Matches comparison_stall's own
+  // 10-minute window (the longest natural gap this app's triggers expect
+  // between two real actions in the "same" browsing session) — a shorter
+  // value here was treating an ordinary multi-page browsing gap as if the
+  // shopper had explicitly closed the chat.
+  const REOPEN_STALE_MS = 10 * 60_000;
   function getStoredSessionId() {
     try {
       return localStorage.getItem(STORAGE_SESSION_KEY);
@@ -284,13 +296,25 @@
   // (up to ~14s away) makes a working feature look broken. sendEvent is
   // fire-and-forget with no ordering guarantee against a signal-check sent
   // right after it, so this awaits the event landing first, then checks.
+  //
+  // bypassOpenGate: true — unlike the background poll, this recheck is a
+  // direct reaction to something the shopper just did (often while looking
+  // at a product card *inside an already-open chat*, e.g. a size pill on a
+  // comparison_stall/complete_the_kit card). Skipping the "don't interrupt
+  // an open panel" gate here just means the reaction lands as the next
+  // message in the same conversation, not a surprise popup — nothing to
+  // suppress. fallbackGreeting stays false: a decline (204) here just means
+  // the evidence wasn't enough yet, not something to paper over with a
+  // generic greeting. deliberate: true — a real, specific action just
+  // happened, so even a hold_back is worth showing in the admin panel (see
+  // checkSignal's own comment for the full deliberate/bypassOpenGate split).
   async function reportEventAndRecheck(event, properties) {
     try {
       await postEvent(event, properties);
     } catch {
       return;
     }
-    checkSignal();
+    checkSignal({ bypassOpenGate: true, deliberate: true });
   }
 
   // Dwell time on a product page — one real behavioral signal the size-guide
@@ -300,6 +324,7 @@
   const viewedProductId = currentProductHandle();
   const viewStartedAt = performance.now();
   let viewedCategory; // filled in once ensureSession's /session response resolves
+  let currentProduct; // ditto — the real per-size stock data, needed to read the theme's own native size selector below
   if (viewedProductId) {
     window.addEventListener("pagehide", () => {
       const seconds = Math.round((performance.now() - viewStartedAt) / 1000);
@@ -416,6 +441,55 @@
     };
   }
 
+  // The Horizon theme's own native size selector — a <variant-picker> custom
+  // element wrapping either radio buttons/swatches or a <select>, per
+  // theme's `blocks/variant-picker.liquid` / `snippets/variant-main-picker.liquid`.
+  // Both styles render each option value's own literal text as the
+  // input/option's `value` — the exact same string our own `stockBySize`
+  // keys use — so matching on `value` works across every variant style
+  // without depending on theme-specific classnames or the button style's
+  // `data-option-available` attribute (which the dropdown style doesn't
+  // render at all, only a translated "- Unavailable" text suffix). This is
+  // a real gap the size-guide FAB/chat-card pills don't cover: a shopper
+  // using the theme's own on-page size selector never touched either of
+  // those, so availability_block never had a chance to fire for them.
+  document.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!currentProduct?.stockBySize || !(target instanceof Element)) return;
+    if (!target.closest("variant-picker")) return;
+    const isRadio = target.tagName === "INPUT" && target.type === "radio";
+    const isSelect = target.tagName === "SELECT";
+    if (!isRadio && !isSelect) return;
+    const size = target.value;
+    if (!(size in currentProduct.stockBySize) || currentProduct.stockBySize[size] > 0) return;
+    reportEventAndRecheck("size_unavailable_viewed", { sku: currentProduct.sku, size });
+  });
+
+  // The order-summary card only ever learned about a cart change through this
+  // widget's own two add flows (the product-card button, pendingCartAdds from
+  // a typed message) — a real add via the theme's own PDP "Add to cart"
+  // button, or a quantity/remove change in the theme's own cart drawer, never
+  // told it anything, so the card looked stale or never appeared at all even
+  // though the shopper's real cart genuinely changed. Every one of those goes
+  // through Shopify's own Ajax Cart API (`/cart/add(.js)`, `/cart/change.js`,
+  // `/cart/update.js`, `/cart/clear.js`) regardless of which theme markup or
+  // custom element triggers it — patching fetch is a fast, no-latency path
+  // for whichever of those calls actually go through window.fetch. It isn't
+  // relied on alone, though: this couldn't be confirmed against the live
+  // theme's exact component internals, and it wasn't catching every case
+  // live (the card only updated after a reload) — startCartPolling below is
+  // the actual reliable backstop, theme-agnostic and cheap thanks to
+  // syncCartFromTheme's own dedup.
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === "string" ? input : input?.url ?? "";
+    const method = (init?.method ?? (typeof input === "object" ? input?.method : undefined) ?? "GET").toUpperCase();
+    const isCartMutation = method === "POST" && /\/cart\/(add|change|update|clear)(\.js)?(\?|$)/.test(url);
+    const result = nativeFetch(input, init);
+    if (isCartMutation) result.then(() => syncCartFromTheme()).catch(() => {});
+    return result;
+  };
+
   function appendProductCards(products) {
     const shown = (products ?? []).filter((p) => p.available);
     if (!shown.length) return;
@@ -463,7 +537,14 @@
         pill.textContent = size;
         pill.addEventListener("click", () => {
           if (stock === 0) {
-            sendEvent("size_unavailable_viewed", { sku: product.sku, size });
+            // Must recheck, not just report — this is exactly the
+            // availability_block trigger's own evidence, and the shopper is
+            // looking right at this card inside an already-open chat, so a
+            // plain fire-and-forget sendEvent() left it waiting on the next
+            // ~9s background poll (which also refuses to run while the panel
+            // is open) — looked like nothing happened at all.
+            reportEventAndRecheck("size_unavailable_viewed", { sku: product.sku, size });
+            stockLine.textContent = `${size} is out of stock right now.`;
             return;
           }
           selectedSize = size;
@@ -519,7 +600,16 @@
     for (const reply of replies ?? []) {
       const btn = document.createElement("button");
       btn.textContent = reply;
-      btn.addEventListener("click", () => sendMessage(reply));
+      // Clear synchronously, before sendMessage's own async work even starts —
+      // a fast double-click/double-tap on the same chip otherwise fires this
+      // handler twice while the first click's customer bubble/request is
+      // still in flight, producing one customer bubble but two identical
+      // agent replies once both requests resolve. sendMessage's own
+      // in-flight guard (below) covers every other path into it.
+      btn.addEventListener("click", () => {
+        quickRepliesEl.innerHTML = "";
+        sendMessage(reply);
+      });
       quickRepliesEl.appendChild(btn);
     }
   }
@@ -529,14 +619,37 @@
     if (signalPollHandle) return;
     // First check mirrors the old fixed-delay pacing; a real signal (not a
     // canned line) decides whether anything actually happens after that.
-    setTimeout(checkSignal, 5000);
-    signalPollHandle = setInterval(checkSignal, 9000);
+    // The recurring interval used to be 9s — the backend now skips the
+    // Gemini call entirely on a tick that finds nothing (the overwhelming
+    // majority of them), so this is no longer really "how often do we ask
+    // Gemini", just "how often do we check the cheap local rules at all".
+    // None of Tier 1/2's own thresholds need sub-20s granularity (90s cart
+    // idle, 10min comparison window), so widening this mainly just cuts
+    // request volume and log noise for a tab left open a long time, not
+    // responsiveness.
+    // The first check is marked deliberate — arriving at this page (possibly
+    // the 2nd, 3rd... product looked at this session) is itself a real,
+    // discrete reason to look, unlike every later tick on the same page
+    // where nothing new has happened. This is what makes comparison_stall's
+    // own "N products viewed, not enough yet" evidence actually show up in
+    // the admin log after browsing e.g. 2 products, instead of only ever
+    // surfacing once the trigger fully fires on the 3rd.
+    setTimeout(() => checkSignal({ deliberate: true }), 5000);
+    signalPollHandle = setInterval(checkSignal, 20000);
   }
 
-  // `force` = the shopper deliberately clicked the launcher, as opposed to a
-  // background poll. A background poll must never interrupt an open panel;
-  // a deliberate open has nothing to interrupt and should never come back
-  // empty, even if the backend has no proactive trigger to fire on.
+  // bypassOpenGate: skips the "don't interrupt an open panel" guard — true
+  // for the shopper deliberately clicking the launcher (a deliberate open has
+  // nothing to interrupt and should never come back empty) and for an
+  // event-triggered recheck (a direct reaction to something that just
+  // happened belongs in the conversation immediately, open or not). Left
+  // false for the plain background poll, which has no new evidence beyond
+  // time passing and genuinely shouldn't interrupt an active conversation.
+  //
+  // fallbackGreeting: only the launcher click wants a guaranteed non-empty
+  // response (a deliberate open should never come back silent) — a
+  // background poll or an event-triggered recheck coming back empty just
+  // means nothing fired yet, not something to paper over with a canned line.
   //
   // The background poll (every ~9s) and an event-triggered recheck (fired
   // right after a size-guide interaction) can otherwise both be in flight for
@@ -545,13 +658,26 @@
   // even send the redundant second request — piggyback on whichever check is
   // already running instead of starting a new one.
   let signalCheckInFlight = null;
-  async function checkSignal(force) {
-    if (!sessionId || (!force && opened)) return;
+  async function checkSignal(opts) {
+    const { bypassOpenGate = false, fallbackGreeting = false, deliberate = false } = opts || {};
+    if (!sessionId || (!bypassOpenGate && opened)) return;
     if (signalCheckInFlight) {
       await signalCheckInFlight;
       return;
     }
-    signalCheckInFlight = performSignalCheck(force);
+    // deliberate is its own flag, separate from bypassOpenGate — they answer
+    // different questions. bypassOpenGate: should this check run even while
+    // the panel is already open. deliberate: does this check have a specific
+    // real reason behind it (an event just happened, the shopper clicked the
+    // launcher, or this is the first look right after a fresh page load —
+    // e.g. having just navigated to a second product, worth surfacing even
+    // if nothing crosses a threshold yet) as opposed to the plain recurring
+    // timer, which has no reason beyond time passing. The server uses this to
+    // decide whether a hold_back still gets logged for the admin panel — a
+    // routine poll finding nothing stays silent, but a deliberate check
+    // always shows up, even when it comes back empty. See CLAUDE.md's admin
+    // panel section.
+    signalCheckInFlight = performSignalCheck(fallbackGreeting, deliberate);
     try {
       await signalCheckInFlight;
     } finally {
@@ -559,7 +685,7 @@
     }
   }
 
-  async function performSignalCheck(force) {
+  async function performSignalCheck(fallbackGreeting, deliberate) {
     let res;
     try {
       // keepalive matters here specifically: a real browsing session (moving
@@ -573,15 +699,15 @@
       res = await fetch(api("/api/chat/signal-check"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
+        body: JSON.stringify({ sessionId, deliberate }),
         keepalive: true,
       });
     } catch {
-      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
+      if (fallbackGreeting) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
       return;
     }
     if (res.status === 204) {
-      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
+      if (fallbackGreeting) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
       return;
     }
     // The server keeps sessions in memory only — a redeploy or a container
@@ -592,7 +718,7 @@
     if (res.status === 404) {
       resetSession();
       ensureSession();
-      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
+      if (fallbackGreeting) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
       return;
     }
     // Any other error status (500 from a Gemini failure, 504 from a genuine
@@ -601,7 +727,7 @@
     // failing is nothing to show; a forced one (the launcher click) still
     // deserves an honest response instead of silence.
     if (!res.ok) {
-      if (force) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
+      if (fallbackGreeting) appendBubble("agent", "Hi! I'm Mia — ask me anything about our gear.");
       return;
     }
     const data = await res.json();
@@ -640,30 +766,49 @@
         if (data.profile?.firstName) {
           headerTitle.textContent = `Hi, ${data.profile.firstName} 👋`;
         }
-        if (data.cart?.totalQuantity > 0) showCartBar(data.cart);
+        // The real (native) cart lives in the browser regardless of what the
+        // backend remembers — read it directly rather than trusting
+        // data.cart, which is only ever a stale echo of what was last
+        // reported (the backend has no session into the native cart itself).
+        syncCartFromTheme();
         renderSizeGuideAffordance(data.product);
         viewedCategory = data.product?.category;
+        currentProduct = data.product;
 
         if (data.history?.length) {
           hasHistory = true;
+          let lastAgentChips = [];
           for (const turn of data.history) {
             appendBubble(turn.role, turn.message);
             if (turn.products?.length) appendProductCards(turn.products);
+            if (turn.role === "agent") lastAgentChips = turn.chips ?? [];
           }
-          // "Was open" has no expiry on its own — left open from a much
-          // earlier test/conversation, it would silently re-open on every
-          // later page and, worse, permanently block the background poll
-          // from ever firing again (checkSignal refuses to interrupt an
-          // open panel). Only honor it if the conversation is actually
-          // recent; a stale one starts closed instead, same as a fresh visit.
+          // A fresh page load rebuilds the log from scratch — the DOM never
+          // remembers the previous page's quick-reply chips, and until now
+          // nothing restored them either, so a real set of options the
+          // shopper saw a moment ago silently vanished on the next page/
+          // reopen even though the conversation itself replayed fine.
+          renderQuickReplies(lastAgentChips);
+          // Only honor "was open" if the conversation is actually recent —
+          // re-derived fresh from the real last-turn timestamp on every page
+          // load, so an ancient test conversation still won't resurrect
+          // itself no matter how long ago it was left open. Deliberately NOT
+          // writing setStoredOpenState(false) when it's merely stale for
+          // *this* page: a shopper who has the chat open and clicks a link
+          // reloads the whole page, and that reload's own first read of this
+          // flag was being treated as "the shopper closed the chat" purely
+          // because it happened once to land just past the threshold —
+          // silently downgrading real "still open" intent into "closed" and
+          // requiring a fresh trigger (or a manual click) to ever show the
+          // panel again for the rest of the visit. The flag now only ever
+          // changes to closed from an actual close-button click.
           const lastTurnAt = new Date(data.history[data.history.length - 1].timestamp).getTime();
           if (getStoredOpenState() && Date.now() - lastTurnAt < REOPEN_STALE_MS) {
             openChat();
-          } else {
-            setStoredOpenState(false);
           }
         }
         startSignalPolling();
+        startCartPolling();
 
         return sessionId;
       })();
@@ -681,7 +826,10 @@
     });
   }
 
+  let sendInFlight = false;
   async function sendMessage(message) {
+    if (sendInFlight) return;
+    sendInFlight = true;
     if (!opened) openChat();
     appendBubble("customer", message);
     renderQuickReplies([]);
@@ -708,12 +856,38 @@
       data = await res.json();
     } finally {
       hideThinking();
+      sendInFlight = false;
     }
 
     hasHistory = true;
     appendBubble("agent", data.reply);
     appendProductCards(data.products);
     renderQuickReplies(data.quickReplies);
+
+    // create_cart resolved real variant ids this turn (e.g. "add the Medium
+    // baselayer to my cart") — the backend has no browser session to add
+    // them for itself, so the widget performs the actual add here, the same
+    // native cart the "Add to cart" button on a product card uses.
+    if (data.pendingCartAdds?.length) {
+      try {
+        await addItemsToNativeCart(data.pendingCartAdds.map((item) => ({ id: nativeVariantId(item.variantId), quantity: item.quantity })));
+        await syncCartFromTheme();
+      } catch {}
+    }
+  }
+
+  /** gid://shopify/ProductVariant/123 -> "123" — the theme's native cart API takes plain numeric ids, never a GID. */
+  function nativeVariantId(variantId) {
+    return variantId.split("/").pop();
+  }
+
+  async function addItemsToNativeCart(items) {
+    const res = await fetch("/cart/add.js", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    if (!res.ok) throw new Error(`native add to cart failed: ${res.status}`);
   }
 
   async function addProductToCart(variantId, btn) {
@@ -721,24 +895,104 @@
     btn.textContent = "Adding…";
     try {
       await ensureSession();
-      const res = await fetch(api("/api/chat/checkout"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, lineItems: [{ variantId, quantity: 1 }] }),
-        keepalive: true,
-      });
-      const cart = await res.json();
+      // Goes straight to the theme's own cart now, not a separate
+      // Storefront-API cart the backend created — that's the whole fix for
+      // "the chat's add to cart doesn't show up in the store's own cart
+      // panel." See CLAUDE.md's "Native cart switch".
+      await addItemsToNativeCart([{ id: nativeVariantId(variantId), quantity: 1 }]);
       btn.textContent = "Added ✓";
-      showCartBar(cart);
+      await syncCartFromTheme();
     } catch {
       btn.disabled = false;
       btn.textContent = "Add to cart";
     }
   }
 
+  /**
+   * Reads the theme's own real cart (never something this app created
+   * itself) and reports it to the backend so complete_the_kit/cart_left_behind/
+   * the free-shipping guardrail keep working — the backend can't fetch this
+   * cart on its own, since it has no browser session into it. Requires
+   * sessionId already set; every call site awaits ensureSession() first.
+   *
+   * Deduped against `lastCartSnapshotKey` so `startCartPolling`'s recurring
+   * call (below) can run cheaply and often — an unchanged cart never gets
+   * past a plain `/cart.js` GET, no `cart_synced` POST, no Storefront
+   * resolve, no Bloomreach write. Only a real change commits the new key,
+   * and only after the round trip actually succeeds — a failed POST leaves
+   * it stale on purpose, so the next tick retries instead of silently
+   * believing an update went through that didn't.
+   */
+  let lastCartSnapshotKey = null;
+  async function syncCartFromTheme() {
+    if (!sessionId) return;
+    let nativeCart;
+    try {
+      const res = await fetch("/cart.js", { headers: { Accept: "application/json" } });
+      nativeCart = await res.json();
+    } catch {
+      return;
+    }
+    if (!nativeCart.items?.length) {
+      lastCartSnapshotKey = "";
+      cartBar.hidden = true;
+      return;
+    }
+    const snapshotKey = `${nativeCart.token}:${nativeCart.item_count}:${nativeCart.total_price}`;
+    if (snapshotKey === lastCartSnapshotKey) return;
+    const lines = nativeCart.items.map((item) => ({
+      variantId: String(item.variant_id),
+      quantity: item.quantity,
+      lineTotal: item.line_price / 100,
+    }));
+    try {
+      const res = await postEvent("cart_synced", {
+        token: nativeCart.token,
+        totalQuantity: nativeCart.item_count,
+        totalAmount: nativeCart.total_price / 100,
+        currencyCode: window.Shopify?.currency?.active || "EUR",
+        lines,
+      });
+      const data = await res.json();
+      if (data.cart) showCartBar(data.cart);
+      lastCartSnapshotKey = snapshotKey;
+    } catch {}
+  }
+
+  // The fetch-patch above catches most real cart mutations, but there's no
+  // way to confirm it sees every one against every theme's exact cart-add
+  // implementation (some component internals are opaque, and this couldn't
+  // be verified against the live storefront directly) — reported live as
+  // the order-summary card only updating after a reload/page navigation,
+  // meaning at least one real path fell through it. This poll is the
+  // reliable, theme-agnostic backstop: it doesn't care how the cart changed,
+  // only that it did, and the dedup above keeps it essentially free the vast
+  // majority of ticks where nothing changed since the last check.
+  let cartPollHandle = null;
+  function startCartPolling() {
+    if (cartPollHandle) return;
+    cartPollHandle = setInterval(syncCartFromTheme, 4000);
+  }
+
   function showCartBar(cart) {
-    cartCountEl.textContent = cart.totalQuantity;
-    cartLink.href = cart.checkoutUrl;
+    cartLinesEl.innerHTML = "";
+    for (const line of cart.lines ?? []) {
+      const row = document.createElement("div");
+      row.className = "ctb-cart-line";
+      const name = document.createElement("span");
+      name.className = "ctb-cart-line-name";
+      const variantSuffix = line.variantTitle && line.variantTitle !== "Default Title" ? ` · ${line.variantTitle}` : "";
+      const qtySuffix = line.quantity > 1 ? ` ×${line.quantity}` : "";
+      name.textContent = `${line.title}${variantSuffix}${qtySuffix}`;
+      const price = document.createElement("span");
+      price.className = "ctb-cart-line-price";
+      price.textContent = formatMoney(line.lineTotal, cart.currencyCode);
+      row.appendChild(name);
+      row.appendChild(price);
+      cartLinesEl.appendChild(row);
+    }
+    cartTotalAmountEl.textContent = formatMoney(cart.totalAmount, cart.currencyCode);
+    cartLink.href = "/checkout";
     cartBar.hidden = false;
   }
 
@@ -753,15 +1007,7 @@
     }
     openChat();
     await ensureSession();
-    await checkSignal(true);
+    await checkSignal({ bypassOpenGate: true, fallbackGreeting: true, deliberate: true });
   });
   closeBtn.addEventListener("click", closeChat);
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const message = input.value.trim();
-    if (!message) return;
-    input.value = "";
-    await sendMessage(message);
-  });
 })();

@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import type { CartHandoff, MiaCandidate } from "../types.js";
+import type { MiaCandidate, CartLineInfo, ClientReportedCart } from "../types.js";
 
 /**
  * Shopify grounds the conversation in real stock/price, then builds the cart.
@@ -336,173 +336,26 @@ export async function loginDemoCustomer(): Promise<CustomerProfile> {
   return { accessToken: customerAccessToken.accessToken, firstName, lastName, email };
 }
 
-const CREATE_CART_MUTATION = `
-  mutation CreateCart($lines: [CartLineInput!]!, $buyerIdentity: CartBuyerIdentityInput, $delivery: CartDeliveryInput) {
-    cartCreate(input: { lines: $lines, buyerIdentity: $buyerIdentity, delivery: $delivery }) {
-      cart {
+// Cart mutations (cartCreate/cartLinesAdd/cartBuyerIdentityUpdate) and the
+// old getCart() used to live here — removed when "Add to cart" switched to
+// the theme's own native `/cart/add.js` (see CLAUDE.md's "Native cart
+// switch"). The backend has no browser session into that native cart, so it
+// can't create or mutate it directly the way it could its own Storefront-API
+// cart; resolveCartLineProducts below is the read-side replacement, fed by
+// what the widget itself reports after reading `/cart.js`.
+
+const CART_LINE_PRODUCTS_QUERY = `
+  query CartLineProducts($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on ProductVariant {
         id
-        checkoutUrl
-        totalQuantity
-      }
-      userErrors {
-        field
-        message
-      }
-    }
-  }
-`;
-
-const ADD_CART_DELIVERY_ADDRESS_MUTATION = `
-  mutation AddDeliveryAddress($cartId: ID!, $addresses: [CartSelectableAddressInput!]!) {
-    cartDeliveryAddressesAdd(cartId: $cartId, addresses: $addresses) {
-      cart { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-interface AddDeliveryAddressData {
-  cartDeliveryAddressesAdd: { cart: { id: string } | null; userErrors: Array<{ field: string[]; message: string }> };
-}
-
-/** Retroactively attaches the demo shipping address — used when login happens after a cart already exists. */
-export async function attachDemoDeliveryAddress(cartId: string): Promise<void> {
-  if (!config.shopify.storeDomain) return;
-  await storefrontRequest<AddDeliveryAddressData>(ADD_CART_DELIVERY_ADDRESS_MUTATION, {
-    cartId,
-    addresses: [{ selected: true, oneTimeUse: false, address: { deliveryAddress: DEMO_DELIVERY_ADDRESS } }],
-  });
-}
-
-const ADD_CART_LINES_MUTATION = `
-  mutation AddCartLines($cartId: ID!, $lines: [CartLineInput!]!) {
-    cartLinesAdd(cartId: $cartId, lines: $lines) {
-      cart {
-        id
-        checkoutUrl
-        totalQuantity
-      }
-      userErrors {
-        field
-        message
-      }
-    }
-  }
-`;
-
-const UPDATE_CART_BUYER_IDENTITY_MUTATION = `
-  mutation UpdateBuyerIdentity($cartId: ID!, $buyerIdentity: CartBuyerIdentityInput!) {
-    cartBuyerIdentityUpdate(cartId: $cartId, buyerIdentity: $buyerIdentity) {
-      cart { id checkoutUrl totalQuantity }
-      userErrors { field message }
-    }
-  }
-`;
-
-interface UpdateBuyerIdentityData {
-  cartBuyerIdentityUpdate: CartResult;
-}
-
-/**
- * Attaches (or clears, passing undefined) the logged-in customer's identity on
- * an already-created cart — used when the customer logs in/out mid-session,
- * after a cart already exists, so switching the toggle visibly changes who
- * checkout will recognize.
- */
-export async function updateCartBuyerIdentity(cartId: string, customerAccessToken: string | undefined): Promise<void> {
-  if (!config.shopify.storeDomain) return;
-  await storefrontRequest<UpdateBuyerIdentityData>(UPDATE_CART_BUYER_IDENTITY_MUTATION, {
-    cartId,
-    buyerIdentity: { customerAccessToken: customerAccessToken ?? null },
-  });
-}
-
-interface CartResult {
-  cart: { id: string; checkoutUrl: string; totalQuantity: number } | null;
-  userErrors: Array<{ field: string[]; message: string }>;
-}
-
-interface CreateCartData {
-  cartCreate: CartResult;
-}
-
-interface AddCartLinesData {
-  cartLinesAdd: CartResult;
-}
-
-export interface CartState extends CartHandoff {
-  cartId: string;
-  totalQuantity: number;
-}
-
-/**
- * Add items to the customer's cart for this session — creates it on the first
- * add, appends lines to the existing cart (so repeated "Add to cart" clicks
- * build up one real cart) on every add after that.
- */
-export async function addToCart(
-  existingCartId: string | undefined,
-  lineItems: Array<{ variantId: string; quantity: number }>,
-  customerAccessToken?: string,
-): Promise<CartState> {
-  if (!config.shopify.storeDomain) {
-    return {
-      cartId: existingCartId ?? "mock-cart",
-      checkoutUrl: "https://example-dev-store.myshopify.com/cart/mock-checkout",
-      lineItems,
-      totalQuantity: lineItems.reduce((sum, item) => sum + item.quantity, 0),
-    };
-  }
-
-  const lines = lineItems.map((item) => ({
-    quantity: item.quantity,
-    merchandiseId: item.variantId.startsWith("gid://")
-      ? item.variantId
-      : `gid://shopify/ProductVariant/${item.variantId}`,
-  }));
-
-  const { cart, userErrors } = existingCartId
-    ? (await storefrontRequest<AddCartLinesData>(ADD_CART_LINES_MUTATION, { cartId: existingCartId, lines }))
-        .cartLinesAdd
-    : (
-        await storefrontRequest<CreateCartData>(CREATE_CART_MUTATION, {
-          lines,
-          buyerIdentity: customerAccessToken ? { customerAccessToken } : undefined,
-          // Only the demo login gets a pre-filled address — a real guest
-          // checkout should still look like a normal empty checkout.
-          delivery: customerAccessToken
-            ? { addresses: [{ selected: true, oneTimeUse: false, address: { deliveryAddress: DEMO_DELIVERY_ADDRESS } }] }
-            : undefined,
-        })
-      ).cartCreate;
-
-  if (userErrors.length > 0) {
-    throw new Error(`Cart update failed: ${userErrors.map((e) => e.message).join(", ")}`);
-  }
-  if (!cart) {
-    throw new Error("Cart update failed: no cart returned");
-  }
-
-  return { cartId: cart.id, checkoutUrl: cart.checkoutUrl, lineItems, totalQuantity: cart.totalQuantity };
-}
-
-const GET_CART_QUERY = `
-  query GetCart($cartId: ID!) {
-    cart(id: $cartId) {
-      checkoutUrl
-      totalQuantity
-      cost { totalAmount { amount } }
-      lines(first: 20) {
-        nodes {
-          merchandise {
-            ... on ProductVariant {
-              product {
-                handle
-                pairsWithMeta: metafield(namespace: "$app", key: "pairs_with") {
-                  references(first: 5) { nodes { ... on Product { handle } } }
-                }
-              }
-            }
+        title
+        product {
+          handle
+          title
+          productType
+          pairsWithMeta: metafield(namespace: "$app", key: "pairs_with") {
+            references(first: 5) { nodes { ... on Product { handle } } }
           }
         }
       }
@@ -510,74 +363,102 @@ const GET_CART_QUERY = `
   }
 `;
 
-interface GetCartData {
-  cart: {
-    checkoutUrl: string;
-    totalQuantity: number;
-    cost: { totalAmount: { amount: string } };
-    lines: {
-      nodes: Array<{
-        merchandise: {
-          product?: {
-            handle: string;
-            pairsWithMeta: { references: { nodes: Array<{ handle: string }> } } | null;
-          };
-        };
-      }>;
+interface CartLineProductsData {
+  nodes: Array<{
+    id: string;
+    title?: string;
+    product?: {
+      handle: string;
+      title: string;
+      productType?: string;
+      pairsWithMeta: { references: { nodes: Array<{ handle: string }> } } | null;
     };
-  } | null;
-}
-
-export interface CartSnapshot {
-  checkoutUrl: string;
-  totalQuantity: number;
-  /** Real total, in the cart's own currency's minor-unit-free decimal amount — was hardcoded to 0 everywhere before, silently breaking the free-shipping offer check. */
-  totalAmount: number;
-  /** Real product handles already in the cart — the complete_the_kit trigger's "not yet in cart" check. */
-  lineHandles: string[];
-  /**
-   * Handles of cart items that themselves have a real pairs_with complement
-   * missing from the cart — i.e. exactly the id search_catalog's own
-   * `pairs_with` filter expects ("Product id to find real complements for
-   * that specific product"), not the missing complement's own handle. The
-   * model already knows how to turn this into the actual complement
-   * candidate via that tool; this only needs to say which cart item has one.
-   */
-  unmatchedPairsWith: string[];
+  } | null>;
 }
 
 /**
- * Re-fetches an existing cart's current state — used to restore the cart bar
- * after a page navigation, and to compute the complete_the_kit trigger's
- * real "cart item pairs with X, X isn't in the cart yet" evidence. The cart
- * itself lives on in Shopify regardless of page reloads; only the widget's
- * in-memory knowledge of it was ever lost.
+ * Categories whose real "Size" option value is genuinely a top/upper-body
+ * size in this catalog's own S/M/L/XL vocabulary. Deliberately excludes
+ * `apparel` (mixes tops like hoodies with bottoms like sweatpants/shorts —
+ * no per-product top/bottom flag exists yet to tell them apart) and `pants`
+ * (a real, distinct size axis with no CustomerProfile field of its own).
+ * Revisit if the catalog/profile schema grows a bottoms-specific property.
  */
-export async function getCart(cartId: string): Promise<CartSnapshot | null> {
-  if (!config.shopify.storeDomain) return null;
-  const data = await storefrontRequest<GetCartData>(GET_CART_QUERY, { cartId });
-  if (!data.cart) return null;
+const TOP_SIZE_CATEGORIES = new Set(["jacket", "midlayer", "baselayer"]);
+const TOP_SIZE_VALUES = new Set(["S", "M", "L", "XL"]);
+const SHOE_SIZE_VALUES = new Set(["7", "8", "9", "10", "11", "12"]);
 
-  const lineHandles = data.cart.lines.nodes.map((n) => n.merchandise.product?.handle).filter((h): h is string => Boolean(h));
+/**
+ * Resolves real product data (handle, title, pairs_with) for cart lines the
+ * widget read from the theme's own native `/cart.js` — that endpoint only
+ * gives real Shopify *variant* ids, never fabricated data, but the backend
+ * still needs the product side (handle/pairs_with) itself from Shopify
+ * rather than trusting anything else about the product from the client.
+ * Mirrors getCart()'s own unmatchedPairsWith logic, just fed from
+ * client-reported variant ids instead of a Storefront Cart object, since
+ * there's no cartId for a native cart the backend has no session into.
+ */
+export async function resolveCartLineProducts(
+  lines: Array<{ variantId: string; quantity: number; lineTotal: number }>,
+): Promise<{
+  lines: CartLineInfo[];
+  lineHandles: string[];
+  unmatchedPairsWith: string[];
+  sizeSignals: { usualSizeTop?: string; usualSizeShoe?: string };
+}> {
+  if (!config.shopify.storeDomain || lines.length === 0) {
+    return { lines: [], lineHandles: [], unmatchedPairsWith: [], sizeSignals: {} };
+  }
+
+  const gids = lines.map((l) => (l.variantId.startsWith("gid://") ? l.variantId : `gid://shopify/ProductVariant/${l.variantId}`));
+  const data = await storefrontRequest<CartLineProductsData>(CART_LINE_PRODUCTS_QUERY, { ids: gids });
+
+  const resolved = lines.map((line, i) => {
+    const node = data.nodes[i];
+    return {
+      variantTitle: node?.title ?? "Default Title",
+      quantity: line.quantity,
+      lineTotal: line.lineTotal,
+      title: node?.product?.title ?? "Item",
+      handle: node?.product?.handle,
+      productType: node?.product?.productType,
+      pairsWithHandles: node?.product?.pairsWithMeta?.references.nodes.map((r) => r.handle) ?? [],
+    };
+  });
+
+  const lineHandles = resolved.map((r) => r.handle).filter((h): h is string => Boolean(h));
   const lineHandleSet = new Set(lineHandles);
   const unmatchedPairsWith = [
     ...new Set(
-      data.cart.lines.nodes
-        .filter((n) => {
-          const complements = n.merchandise.product?.pairsWithMeta?.references.nodes ?? [];
-          return complements.some((ref) => !lineHandleSet.has(ref.handle));
-        })
-        .map((n) => n.merchandise.product?.handle)
+      resolved
+        .filter((r) => r.pairsWithHandles.some((h) => !lineHandleSet.has(h)))
+        .map((r) => r.handle)
         .filter((h): h is string => Boolean(h)),
     ),
   ];
 
+  // A real, deterministic size signal from what's actually in the cart —
+  // no chat message or LLM judgment call needed, unlike update_customer_profile.
+  // Most Mia replies are chip-driven, so a shopper stating their size in free
+  // text is rare; this is a far more reliable source of the same fact. Last
+  // matching line wins (cart order mirrors add order), same "latest fact
+  // overwrites the old one" spirit as a shopper correcting their own size.
+  const sizeSignals: { usualSizeTop?: string; usualSizeShoe?: string } = {};
+  for (const line of resolved) {
+    if (!line.productType) continue;
+    const size = line.variantTitle;
+    if (TOP_SIZE_CATEGORIES.has(line.productType) && TOP_SIZE_VALUES.has(size)) {
+      sizeSignals.usualSizeTop = size;
+    } else if (line.productType === "footwear" && SHOE_SIZE_VALUES.has(size)) {
+      sizeSignals.usualSizeShoe = size;
+    }
+  }
+
   return {
-    checkoutUrl: data.cart.checkoutUrl,
-    totalQuantity: data.cart.totalQuantity,
-    totalAmount: Number(data.cart.cost.totalAmount.amount),
+    lines: resolved.map(({ title, variantTitle, quantity, lineTotal, handle }) => ({ title, variantTitle, quantity, lineTotal, handle: handle ?? "" })),
     lineHandles,
     unmatchedPairsWith,
+    sizeSignals,
   };
 }
 
@@ -790,12 +671,34 @@ export async function checkStock(skus: string[]): Promise<Record<string, Record<
   return result;
 }
 
-/** Resolves a real Shopify variantId from a merchant SKU — create_cart works by SKU per the playbook, addToCart by variantId internally. */
+/**
+ * Resolves a real Shopify variantId from a merchant SKU — create_cart works
+ * by SKU per the playbook, addToCart by variantId internally.
+ *
+ * Found live: the Storefront API's `products(query:)` search does NOT
+ * support `sku:` as a filter key on this store — confirmed by testing
+ * `sku:'<any real SKU>'`, `sku:'<garbage>'`, and an empty query string, all
+ * three returning the exact same fixed 5 products (this store's original
+ * seed, i.e. whatever a plain unfiltered query happens to return first) —
+ * not an escaping/quoting issue, the filter term is silently ignored
+ * entirely. Combined with the old `first: 5` cap, this meant SKU resolution
+ * only ever "worked" for those original 5 products by coincidence, and
+ * silently failed (no error, no exception, just a correct-looking `null`)
+ * for every one of the 60 products added since — including ordinary,
+ * in-stock items like the Trailhead Approach Shoe. The exact-match check
+ * below was never the bug (it correctly refused to return a wrong product);
+ * the bug was that the real product was never in the candidate set to begin
+ * with. Fixed by not relying on server-side SKU filtering at all: fetch the
+ * catalog unfiltered and match client-side, which is correct regardless of
+ * what the search index supports. `first: 250` covers the full real catalog
+ * (65 products) in one request — revisit with real cursor pagination if the
+ * catalog ever grows past that.
+ */
 export async function resolveVariantIdBySku(sku: string): Promise<string | null> {
   if (!config.shopify.storeDomain) return null;
   const data = await storefrontRequest<{ products: { nodes: Array<{ variants: { nodes: Array<{ id: string; sku: string }> } }> } }>(
-    `query BySku($query: String!) { products(first: 5, query: $query) { nodes { variants(first: 20) { nodes { id sku } } } } }`,
-    { query: `sku:'${sku}'` },
+    `query AllSkus { products(first: 250) { nodes { variants(first: 20) { nodes { id sku } } } } }`,
+    {},
   );
   for (const product of data.products.nodes) {
     const match = product.variants.nodes.find((v) => v.sku === sku);
