@@ -94,6 +94,8 @@ export interface CartLineInfo {
   variantTitle: string;
   quantity: number;
   lineTotal: number;
+  /** Real Shopify ProductVariant gid — needed to build a UCP (Agentic Storefronts) checkout handoff from this line. */
+  variantId: string;
 }
 
 /**

@@ -77,8 +77,11 @@ const COMPARISON_STALL_MIN_PRODUCTS_BY_CATEGORY: Record<string, number> = {
  * back-to-back a few seconds apart, which reads as spammy rather than
  * proactive. This gate only applies to proactive (signal-driven) turns — a
  * direct reply to something the shopper just typed must never be delayed.
+ * Brought down from 15s to 5s for a snappier demo, to match the ambient
+ * poll's own 5s cadence — still enough to stop two triggers landing in the
+ * same breath, without adding a much longer wait on top of the poll itself.
  */
-const MIN_PROACTIVE_SPEAK_GAP_MS = 15_000;
+const MIN_PROACTIVE_SPEAK_GAP_MS = 5_000;
 
 function holdBack(alsoTrue: string[], quietRulesInForce: string[]): SignalCase {
   return {

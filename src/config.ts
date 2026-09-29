@@ -34,6 +34,10 @@ export const config = {
     apiVersion: required("SHOPIFY_API_VERSION", "2026-01"),
   },
 
+  // This service's own public URL — needed to hand Shopify's UCP (Agentic
+  // Storefronts) endpoint a reachable agent-profile URI on every UCP call.
+  publicBackendUrl: required("PUBLIC_BACKEND_URL"),
+
   // The reasoning/troubleshooting log panel (public/admin.html) — separate
   // name from shopify.adminToken above (a completely unrelated Shopify Admin
   // API credential) to avoid confusion between the two "admin"s.

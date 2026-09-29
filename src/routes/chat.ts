@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction, type RequestHandler } from "express";
 import { randomUUID } from "node:crypto";
 import { chatWithMia, type MiaTurnResult, type BloomreachWriteLog } from "../integrations/gemini.js";
-import { getCandidateByHandle, loginDemoCustomer, resolveCartLineProducts } from "../integrations/shopify.js";
+import { getCandidateByHandle, loginDemoCustomer, resolveCartLineProducts, createUcpCheckoutUrl } from "../integrations/shopify.js";
 import { recordCartUpdateEvent, getCustomerProfile, updateCustomerProfile, recordEvent } from "../integrations/bloomreach.js";
 import { evaluateSignalCase } from "../services/signals.js";
 import type { ChatSession } from "../types.js";
@@ -210,6 +210,28 @@ chatRouter.post("/session", asyncHandler(async (req, res) => {
       session.currentProduct = product;
       session.behavior.pageType = "pdp";
       session.behavior.category = product.category;
+
+      // Record the view the instant the page loads, not just when the
+      // shopper leaves it — comparison_stall (evaluateSignalCase) only ever
+      // counts what's in productsViewed, which used to be populated
+      // exclusively by product_view_end on `pagehide`. That made whichever
+      // product a shopper was currently looking at invisible to the trigger
+      // until they navigated away from it — found live: a 3-way jacket
+      // comparison needed an extra, seemingly pointless revisit to one of
+      // the earlier products before it would fire, because the 3rd product
+      // was never actually counted until that revisit's own navigation
+      // finally triggered its predecessor's pagehide. `views` is only
+      // incremented here (once per real page load); product_view_end below
+      // only adds dwell time and refreshes the timestamp, so a visit is
+      // never double-counted between arrival and departure.
+      const existingView = session.behavior.productsViewed[product.id];
+      session.behavior.productsViewed[product.id] = {
+        productId: product.id,
+        views: (existingView?.views ?? 0) + 1,
+        totalSeconds: existingView?.totalSeconds ?? 0,
+        lastViewedAt: new Date().toISOString(),
+        category: product.category,
+      };
     }
   }
 
@@ -301,17 +323,28 @@ chatRouter.post("/event", asyncHandler(async (req, res) => {
   const { behavior } = session;
   behavior.lastActivityAt = new Date().toISOString();
   const props = properties ?? {};
+  // Only ever set for cart_synced — a real UCP (Agentic Storefronts) checkout
+  // handoff for the cart as it stands right after this sync, so the widget's
+  // persistent cart bar always links to a genuine, line-item-accurate hosted
+  // checkout instead of the generic static `/checkout` page. Computed here
+  // (once, only on a real cart change) rather than in showCartBar's caller
+  // on every event type, since every other event type never touches the cart.
+  let checkoutUrl: string | undefined;
 
   switch (event) {
     case "product_view_end": {
+      // views is already counted on arrival (the /session handler above) —
+      // this only ever adds the real dwell time, known solely at departure,
+      // and refreshes the timestamp. Not incrementing views again here
+      // avoids double-counting the same visit between arrival and departure.
       const productId = String(props.productId ?? "");
       const seconds = Number(props.seconds ?? 0);
       const category = props.category ? String(props.category) : undefined;
       if (productId) {
-        const existing = behavior.productsViewed[productId] ?? { productId, views: 0, totalSeconds: 0, lastViewedAt: "" };
+        const existing = behavior.productsViewed[productId] ?? { productId, views: 1, totalSeconds: 0, lastViewedAt: "" };
         behavior.productsViewed[productId] = {
           productId,
-          views: existing.views + 1,
+          views: existing.views,
           totalSeconds: existing.totalSeconds + seconds,
           lastViewedAt: new Date().toISOString(),
           category: category ?? existing.category,
@@ -377,6 +410,10 @@ chatRouter.post("/event", asyncHandler(async (req, res) => {
         }).catch(() => {});
       }
 
+      if (session.cart.lines.length > 0) {
+        checkoutUrl = (await createUcpCheckoutUrl(session.cart.lines).catch(() => null)) ?? undefined;
+      }
+
       // A real, deterministic size signal from what's actually in the cart —
       // most of Mia's replies are chip-driven, so a shopper stating their own
       // size in free text (the only thing that previously updated this) is
@@ -406,8 +443,10 @@ chatRouter.post("/event", asyncHandler(async (req, res) => {
   // For cart_synced specifically, hand back the resolved cart (real product
   // titles/handles from Shopify, not something the widget has to guess at
   // from /cart.js's own field names) so it can render the order-summary card
-  // from one authoritative source instead of two.
-  res.json({ ok: true, cart: session.cart ?? null });
+  // from one authoritative source instead of two. checkoutUrl is only ever
+  // set on that same case — undefined here means "use the static fallback",
+  // handled client-side, not "no real checkout available".
+  res.json({ ok: true, cart: session.cart ?? null, checkoutUrl });
 }));
 
 chatRouter.post("/login", asyncHandler(async (req, res) => {

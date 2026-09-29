@@ -416,6 +416,7 @@ export async function resolveCartLineProducts(
   const resolved = lines.map((line, i) => {
     const node = data.nodes[i];
     return {
+      variantId: gids[i],
       variantTitle: node?.title ?? "Default Title",
       quantity: line.quantity,
       lineTotal: line.lineTotal,
@@ -455,7 +456,7 @@ export async function resolveCartLineProducts(
   }
 
   return {
-    lines: resolved.map(({ title, variantTitle, quantity, lineTotal, handle }) => ({ title, variantTitle, quantity, lineTotal, handle: handle ?? "" })),
+    lines: resolved.map(({ title, variantTitle, quantity, lineTotal, handle, variantId }) => ({ title, variantTitle, quantity, lineTotal, handle: handle ?? "", variantId })),
     lineHandles,
     unmatchedPairsWith,
     sizeSignals,
@@ -705,6 +706,81 @@ export async function resolveVariantIdBySku(sku: string): Promise<string | null>
     if (match) return match.id;
   }
   return null;
+}
+
+/**
+ * Real, confirmed-live UCP (Universal Commerce Protocol — Shopify's actual
+ * "Agentic Storefronts" surface) endpoint, auto-enabled on every Shopify
+ * store since March 2026, entirely separate from the classic Storefront API
+ * used everywhere else in this file. Every call requires `meta.ucp-agent.profile`,
+ * a URL Shopify's server itself fetches to verify the calling agent — ours
+ * is a static file this same service publishes (public/ucp-agent-profile.json).
+ */
+const UCP_MCP_ENDPOINT_PATH = "/api/ucp/mcp";
+
+interface UcpToolCallResult {
+  result?: { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+  error?: { message: string };
+}
+
+/**
+ * Builds a real checkout handoff via UCP's `create_cart` — confirmed live
+ * this session that its response already includes a real `continue_url`
+ * (a `/cart/c/<id>?key=...` permalink that redirects straight into Shopify's
+ * real hosted checkout, `checkouts/cn/...`) with no separate `create_checkout`
+ * call needed. Deliberately built fresh from the current native cart lines on
+ * every call rather than persisting/reusing a UCP cart id across turns — this
+ * app already has the real, current line items from `session.cart` (synced
+ * from the theme's own native `/cart.js`), so there's nothing to gain from
+ * `get_cart`/`update_cart`, and re-deriving from scratch avoids ever handing
+ * back a stale UCP cart if the native cart changed since the last ask.
+ *
+ * Confirmed this is NOT a merge into the theme's native cart — visiting the
+ * returned `continue_url` redirects straight to a hosted checkout page
+ * without ever populating `/cart.js`. That's fine for this use (a checkout
+ * link is exactly what get_checkout already hands back), but it must never
+ * be used as a stand-in for the native add-to-cart flow — see CLAUDE.md's
+ * "Native cart switch" for the earlier bug this would otherwise reintroduce.
+ *
+ * `complete_checkout` (finishing payment without leaving the conversation)
+ * still needs a real tokenized payment credential this dev store doesn't
+ * have — unchanged by this. Returns null on any failure so callers can fall
+ * back to the plain `/checkout` path; this is a nice-to-have upgrade to an
+ * already-working feature, never the only way to check out.
+ */
+export async function createUcpCheckoutUrl(lines: CartLineInfo[]): Promise<string | null> {
+  if (!config.shopify.storeDomain || !config.publicBackendUrl || lines.length === 0) return null;
+
+  try {
+    const res = await fetch(`https://${config.shopify.storeDomain}${UCP_MCP_ENDPOINT_PATH}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "create_cart",
+          arguments: {
+            meta: { "ucp-agent": { profile: `${config.publicBackendUrl}/ucp-agent-profile.json` } },
+            cart: {
+              line_items: lines.map((line) => ({
+                item: { id: line.variantId },
+                quantity: line.quantity,
+              })),
+            },
+          },
+        },
+      }),
+    });
+    const body = (await res.json()) as UcpToolCallResult;
+    const text = body.result?.content?.[0]?.text;
+    if (!text || body.result?.isError) return null;
+    const parsed = JSON.parse(text) as { continue_url?: string };
+    return parsed.continue_url ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function mockProducts(query: string): ProductSummary[] {

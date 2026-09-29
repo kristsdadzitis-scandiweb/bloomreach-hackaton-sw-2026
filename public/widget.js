@@ -234,9 +234,18 @@
   // past this, treat it as left open from an old session rather than an
   // active conversation still in progress. Matches comparison_stall's own
   // 10-minute window (the longest natural gap this app's triggers expect
-  // between two real actions in the "same" browsing session) — a shorter
-  // value here was treating an ordinary multi-page browsing gap as if the
-  // shopper had explicitly closed the chat.
+  // between two real actions in the "same" browsing session).
+  //
+  // This only ever gates *restoring a previously-open panel with nothing new
+  // to say* on a fresh page load — it does not, and must not, gate a genuine
+  // proactive message. performSignalCheck's own openChat() call (a real
+  // trigger fired, Gemini actually replied) is unconditional and runs
+  // regardless of this flag or the in-page `opened` variable, on this page or
+  // the next one — closing the panel must never cause a real message to go
+  // silently undelivered. What this flag alone controls is narrower: if the
+  // shopper explicitly closed the chat and then just moves to another page
+  // with nothing new having happened, don't resurrect the same dismissed
+  // conversation for no reason.
   const REOPEN_STALE_MS = 10 * 60_000;
   function getStoredSessionId() {
     try {
@@ -352,6 +361,7 @@
   function closeChat() {
     panel.hidden = true;
     launcher.hidden = false;
+    opened = false;
     setStoredOpenState(false);
   }
 
@@ -619,14 +629,11 @@
     if (signalPollHandle) return;
     // First check mirrors the old fixed-delay pacing; a real signal (not a
     // canned line) decides whether anything actually happens after that.
-    // The recurring interval used to be 9s — the backend now skips the
-    // Gemini call entirely on a tick that finds nothing (the overwhelming
-    // majority of them), so this is no longer really "how often do we ask
-    // Gemini", just "how often do we check the cheap local rules at all".
-    // None of Tier 1/2's own thresholds need sub-20s granularity (90s cart
-    // idle, 10min comparison window), so widening this mainly just cuts
-    // request volume and log noise for a tab left open a long time, not
-    // responsiveness.
+    // Kept at a tight 5s cadence for a snappier demo — the backend still
+    // skips the Gemini call entirely on a tick that finds nothing (the
+    // overwhelming majority of them), so this is cheap even at this
+    // frequency; it's "how often do we check the cheap local rules", not
+    // "how often do we ask Gemini".
     // The first check is marked deliberate — arriving at this page (possibly
     // the 2nd, 3rd... product looked at this session) is itself a real,
     // discrete reason to look, unlike every later tick on the same page
@@ -635,7 +642,7 @@
     // the admin log after browsing e.g. 2 products, instead of only ever
     // surfacing once the trigger fully fires on the 3rd.
     setTimeout(() => checkSignal({ deliberate: true }), 5000);
-    signalPollHandle = setInterval(checkSignal, 20000);
+    signalPollHandle = setInterval(checkSignal, 5000);
   }
 
   // bypassOpenGate: skips the "don't interrupt an open panel" guard — true
@@ -789,19 +796,17 @@
           // shopper saw a moment ago silently vanished on the next page/
           // reopen even though the conversation itself replayed fine.
           renderQuickReplies(lastAgentChips);
-          // Only honor "was open" if the conversation is actually recent —
-          // re-derived fresh from the real last-turn timestamp on every page
-          // load, so an ancient test conversation still won't resurrect
-          // itself no matter how long ago it was left open. Deliberately NOT
-          // writing setStoredOpenState(false) when it's merely stale for
-          // *this* page: a shopper who has the chat open and clicks a link
-          // reloads the whole page, and that reload's own first read of this
-          // flag was being treated as "the shopper closed the chat" purely
-          // because it happened once to land just past the threshold —
-          // silently downgrading real "still open" intent into "closed" and
-          // requiring a fresh trigger (or a manual click) to ever show the
-          // panel again for the rest of the visit. The flag now only ever
-          // changes to closed from an actual close-button click.
+          // Restore the panel open on a fresh page load only when the
+          // shopper didn't explicitly close it AND the conversation is still
+          // recent — recency is re-derived fresh from the real last-turn
+          // timestamp every time, so an ancient test conversation never
+          // resurrects itself no matter how long ago it was left open. This
+          // is deliberately narrower than "was there a real conversation": an
+          // explicit X close means "leave this dismissed" on the next page,
+          // not "forget it happened" — a genuinely new proactive message
+          // still isn't affected by this at all, since performSignalCheck's
+          // own openChat() call runs unconditionally on real evidence,
+          // independent of this flag.
           const lastTurnAt = new Date(data.history[data.history.length - 1].timestamp).getTime();
           if (getStoredOpenState() && Date.now() - lastTurnAt < REOPEN_STALE_MS) {
             openChat();
@@ -954,7 +959,7 @@
         lines,
       });
       const data = await res.json();
-      if (data.cart) showCartBar(data.cart);
+      if (data.cart) showCartBar(data.cart, data.checkoutUrl);
       lastCartSnapshotKey = snapshotKey;
     } catch {}
   }
@@ -974,7 +979,7 @@
     cartPollHandle = setInterval(syncCartFromTheme, 4000);
   }
 
-  function showCartBar(cart) {
+  function showCartBar(cart, checkoutUrl) {
     cartLinesEl.innerHTML = "";
     for (const line of cart.lines ?? []) {
       const row = document.createElement("div");
@@ -992,7 +997,14 @@
       cartLinesEl.appendChild(row);
     }
     cartTotalAmountEl.textContent = formatMoney(cart.totalAmount, cart.currencyCode);
-    cartLink.href = "/checkout";
+    // Prefers a real UCP (Shopify Agentic Storefronts) checkout handoff —
+    // a genuine, line-item-accurate hosted checkout URL for this exact cart,
+    // built server-side via createUcpCheckoutUrl — falling back to the
+    // theme's generic static /checkout entry point if that call failed or
+    // wasn't attempted (e.g. a native cart mutation the backend hasn't
+    // resolved yet). Both are real, working checkout entry points; this is
+    // strictly a preference for the more specific one when it's available.
+    cartLink.href = checkoutUrl || "/checkout";
     cartBar.hidden = false;
   }
 

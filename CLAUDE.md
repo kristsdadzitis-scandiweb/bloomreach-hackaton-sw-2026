@@ -89,77 +89,6 @@ Don't assume — check:
 - Write path: trigger `/api/chat/checkout` (or curl it directly) with a distinctive
   `customerId`, then look it up via the read path above to confirm the event landed.
 
-# Databricks access
-
-Same pattern as Bloomreach: **two separate connections**, don't assume one implies the
-other. `.env` has `DATABRICKS_TOKEN` only — no host or SQL warehouse HTTP path, and
-`config.ts` has no Databricks integration at all. The app itself cannot currently talk
-to Databricks; everything below was done via `mcp__databricks__*` tools, i.e. **the
-logged-in user's own Databricks account**, the same way Loomi Connect uses the user's
-own Bloomreach login.
-
-Two catalogs matter here, with different permissions for this account:
-- `databricks-hackathon` — the shared hackathon reference catalog (`scandiweb`,
-  `00data` schemas with fully synthetic sample data, `source_system: "sample_seed_42"`).
-  **Read-only** for this account — `CREATE SCHEMA` on it fails with `PERMISSION_DENIED`.
-  Don't try to write here again without re-checking; assume it's still read-only.
-- `workspace_2` — this account's own catalog. `CREATE SCHEMA` on the catalog itself is
-  *also* denied, but `CREATE TABLE` inside its existing `default` schema works. So real
-  project data lives directly in `workspace_2.default`, prefixed `chat_to_buy_*` (no
-  dedicated schema was possible) — not `databricks-hackathon.chat_to_buy` like an
-  earlier plan assumed before actually testing permissions.
-
-Note: `workspace_2` is scoped to the personal-role identity this MCP session
-authenticates as — it isn't visible when browsing Databricks under the org's "Scandiweb"
-role (confirmed: different workspace/role context, not a UI caching issue). Deliberately
-left as-is — this data only needs to support the app functioning, not to be browsable
-under every role, so don't treat the role mismatch as something to fix.
-
-## What's loaded in `workspace_2.default.chat_to_buy_*` (real data, not synthetic)
-
-- `chat_to_buy_products` — the full real Shopify catalog (21 rows) via the Storefront
-  API. `unit_cost`/`subcategory` are genuinely NULL (not available/not modeled), not
-  omitted by mistake.
-- `chat_to_buy_customers` — real Bloomreach customers, keyed by the **same cookie id**
-  Bloomreach uses, so this table and Bloomreach are actually joinable by `customer_id`
-  (unlike the sample data, which shares no key with anything). Only 2 rows: see scope
-  note below. `first_name`/`last_name`/`email`/etc. are NULL — these are anonymous
-  cookie-identified visitors, there's no real name/email to put there. `synthetic_record`
-  is always `false` here, unlike the sample data — a real, meaningful signal.
-- `chat_to_buy_transactions` / `chat_to_buy_transaction_items` — derived from real
-  `cart_updated` events read back from Bloomreach, joined against real Shopify variant
-  prices (Storefront `nodes` query) for honest `unit_price`/amounts, since the Bloomreach
-  event itself only carries `cart_id`/`variantId`/`quantity`, no price. **Important:**
-  `transaction_status` is `'cart_item_added'`, not `'completed'` — these represent real
-  add-to-cart actions, not confirmed orders (same order-webhook approval gate as the
-  Bloomreach section above). Don't reinterpret these as completed sales.
-- `chat_to_buy_customer_features` / predictions — **not created**. Real feature
-  aggregation over 2 customers/3 events is nearly degenerate, and a real
-  `customer_predictions` table needs an actual trained model — fabricating scores there
-  would repeat the exact mistake the fake `purchase` event was fixed for. Natural
-  follow-up once there's more real traffic, not before.
-
-## Scope: this is a bounded backfill, not a full historical export
-
-Only 2 customers (`demo-customer`, `test-cart-resume`) are loaded, out of 877 total
-Bloomreach customers. There is no working bulk-discovery path for "which customers have
-a real `cart_updated` event": `execute_analytics_eql`'s `customers matching
-exists[event ...]` combined with an identifier breakdown (`by customer.id` / `by
-customer.cookie`) reliably returns zero rows even when a match is directly confirmed via
-`list_customer_events` — a tool limitation, not zero real activity. `list_customer_events`
-itself needs a `customer_id`, so without a working discovery query the only way to find
-more real activity is checking specific known ids one at a time (rate-limited to ~1/sec).
-If a future session wants full coverage, that discovery gap is the thing to solve first —
-don't assume 2 customers is the true total, and don't re-attempt the same EQL approach
-without a reason to think it'll behave differently.
-
-## Phase 2 (not started): live dual-write from the app
-
-Idea: have `POST /api/chat/checkout` write a transaction row to Databricks the moment a
-cart updates, same event/instant as the Bloomreach write, fire-and-forget. Blocked on
-getting a real Databricks workspace URL + SQL warehouse HTTP path from the user — the
-token alone isn't enough for the app to call the SQL Statement Execution API itself.
-
 # Northbound catalog (Mia demo)
 
 The old snowboard/Weird Fish catalog (22 products) was deleted via `productDelete` —
@@ -384,7 +313,7 @@ confirmed from docs alone.
 
 # Shopify access
 
-Unlike Bloomreach/Databricks, this one has **no MCP/interactive-login layer** for the
+Unlike Bloomreach, this one has **no MCP/interactive-login layer** for the
 app's own data — the app talks to Shopify directly over HTTP with credentials from
 `.env`, so it works the same whether it's this session, another session, or the deployed
 Cloud Run service making the call. The `shopify-plugin:*` skills (shopify-admin-graphql,
@@ -464,9 +393,6 @@ const yaml = lines
 fs.writeFileSync('/path/to/scratchpad/cloudrun-env.yaml', yaml);
 "
 ```
-`DATABRICKS_TOKEN` is in `.env` but never makes it into `config.ts`/the deployed env —
-harmless to include or omit, the app doesn't read it either way (see "Databricks access"
-above — the app has no Databricks wiring at all yet).
 
 ## Native cart switch — "Add to cart" no longer creates its own Storefront cart
 
@@ -649,10 +575,12 @@ each independently deciding to speak, producing two proactor messages
 seconds apart. Fixed with a new quiet-gap in `evaluateSignalCase`
 (`signals.ts`): `SessionBehavior.lastProactiveSpokeAt` is stamped whenever a
 proactive (signal-driven, no customer message) turn actually speaks, and any
-proactive evaluation within `MIN_PROACTIVE_SPEAK_GAP_MS` (15s) of that
-defers to `hold_back` regardless of which trigger would otherwise fire — the
-deferred trigger isn't consumed or marked fired, it's simply re-evaluated
-fresh (and usually fires normally) on the next check a few seconds later.
+proactive evaluation within `MIN_PROACTIVE_SPEAK_GAP_MS` (originally 15s,
+brought down to 5s later this project to match the poll's own cadence for a
+snappier demo) of that defers to `hold_back` regardless of which trigger
+would otherwise fire — the deferred trigger isn't consumed or marked fired,
+it's simply re-evaluated fresh (and usually fires normally) on the next
+check a few seconds later.
 Deliberately scoped to proactive turns only (`isProactive` param, `true`
 when `runMiaTurn`'s `latestMessage` is `undefined`) — a direct reply to
 something the shopper just typed must never be delayed by this.
@@ -950,6 +878,28 @@ products now correctly fires `comparison_stall` ("going back and forth
 between the Summit Wool and the Featherline… weight, price, or
 waterproofing?") — previously impossible with only 2 real products to view.
 
+## comparison_stall lagged one product behind — the currently-open page was never counted
+
+Asked directly (live testing the 3-jacket comparison): why did a real product need to be
+revisited before the trigger fired, when only 3 distinct products should have been
+enough? Root cause: `productsViewed` (what `evaluateSignalCase` actually counts) was
+*only* ever populated by the `product_view_end` event, which the widget fires solely on
+`pagehide` (`public/widget.js`) — i.e. only once a shopper navigates away from a product
+page, never while still on it. So the product currently open was invisible to the
+trigger until left — viewing jacket 1, then jacket 2, then jacket 3 and stopping there
+only ever recorded 2 distinct products; navigating anywhere (back to jacket 1, onward to
+a 4th page) is what finally fired jacket 3's own `pagehide` and pushed the count to 3.
+Revisiting an earlier product looked like the fix but wasn't really it — any navigation
+away from the last product would have worked identically.
+
+Fixed by recording the view **on arrival**, not just on departure: `POST
+/api/chat/session` (`chat.ts`) already resolves `productHandle` into a real product on
+every PDP load — it now also immediately upserts `productsViewed[product.id]` with a
+fresh `lastViewedAt`, so `comparison_stall` sees the product the instant the page loads.
+To avoid double-counting the same visit, `views` is only ever incremented at arrival now;
+`product_view_end` (on `pagehide`) only adds the real dwell time and refreshes the
+timestamp, never increments `views` again itself.
+
 # Gemini API
 
 Also no MCP layer — plain REST from `src/integrations/gemini.ts`:
@@ -1077,10 +1027,12 @@ to the `cloudrun-env.yaml` regeneration step before deploying (it already is
    flag needed) — a poll that found nothing and never even asked Gemini isn't
    a decision worth showing, and was the actual source of the "logs every
    second" clutter reported live. The widget's own poll interval
-   (`startSignalPolling`, `widget.js`) was also widened from 9s to 20s on top
-   of this — no Tier 1/2 threshold needs sub-20s granularity (90s cart idle,
-   10min comparison window), so this mainly cuts raw request volume for a tab
-   left open a long time, not responsiveness.
+   (`startSignalPolling`, `widget.js`) was widened from 9s to 20s on top of
+   this at the time — later brought back down to 5s for a snappier demo, since
+   the skip-Gemini optimization above already keeps a routine tick cheap
+   regardless of cadence; no Tier 1/2 threshold needs sub-20s granularity
+   (90s cart idle, 10min comparison window) so this is purely a demo-feel
+   choice, not something the trigger logic depends on.
 
 2. **Log cards visually compressed as more accumulated — a real flexbox bug,
    not a rendering illusion.** `.log-entry` in `admin.html` is a flex child of
@@ -1114,6 +1066,41 @@ to the `cloudrun-env.yaml` regeneration step before deploying (it already is
    enough times yet to fire"` at 0ms (still no Gemini call), and opening it a
    second time crosses the threshold and logs a real ~9s Gemini-backed
    `size_guide_reopened` entry right after it.
+
+## closeChat() never reset the `opened` flag — the ambient poll stayed permanently disarmed after the first open
+
+Asked directly: after closing the chat with the X, when does it come back on its own?
+Traced it and found `opened` (the flag `checkSignal` uses to gate the plain ambient
+20s-then-5s poll — "don't interrupt an active conversation") was set `true` by
+`openChat()` but never set back to `false` by `closeChat()`, in any version of this file
+per `git log -p` — not a recent regression, present since the flag was introduced.
+Effect: once the chat had been opened even once on a given page, the ambient poll was
+permanently blocked from reopening it again on that same page, even long after an
+explicit close, even when a genuinely new trigger condition became true — only a
+"deliberate" event-triggered check (an out-of-stock size click, a second size-guide
+open) or manually clicking the launcher could still bring it back. `setStoredOpenState`
+(the separate, cross-page-reload memory of open/closed) was already correct — this was
+purely the in-page runtime flag. Fixed by adding `opened = false;` to `closeChat()`.
+
+Same session: the ambient poll interval (`startSignalPolling`, `widget.js`) was brought
+back down from 20s to **5s** for a snappier demo — safe because the skip-Gemini
+optimization above already makes a routine tick cheap (hold_back short-circuits before
+any Gemini call) regardless of how often it runs; no Tier 1/2 threshold needs
+sub-20s granularity, so this is purely a demo-feel choice, not something the trigger
+logic depends on.
+
+**Short-lived follow-up, same session**: `setStoredOpenState`/`getStoredOpenState` (the
+cross-page-reload "was it open" memory) were briefly removed entirely, on request, so
+that closing the chat could never suppress a later proactive message even across a page
+navigation — not just on the same page. Reverted on further request: the actual want was
+narrower than "never respect a close" — a shopper who explicitly closes the chat and
+then just moves to another page with nothing new to report shouldn't have the *same
+dismissed conversation* resurrected on them, but a genuinely new trigger firing on the
+next page must still show up regardless. `setStoredOpenState`/`getStoredOpenState` are
+back, gating only the "restore a previously-open panel with nothing new to say" path in
+the history-replay block — `performSignalCheck`'s own `openChat()` call for a real
+trigger was never gated by this flag either before or after, on this page or the next
+one, so the demo-reliability goal (never silently miss a real message) still holds.
 
 # Local dev gotcha
 

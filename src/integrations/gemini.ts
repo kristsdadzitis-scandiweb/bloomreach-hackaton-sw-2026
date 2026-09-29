@@ -5,6 +5,7 @@ import {
   checkStock,
   getCandidateByHandle,
   resolveVariantIdBySku,
+  createUcpCheckoutUrl,
   type SearchCatalogFilters,
 } from "./shopify.js";
 import { getCustomerProfile, recordEvent, updateCustomerProfile } from "./bloomreach.js";
@@ -344,11 +345,17 @@ async function runMiaToolLoop(
           // Real cart state, but sourced from what the widget already
           // reported (session.cart) rather than a fresh Shopify fetch — the
           // backend has no session into the shopper's native cart to fetch
-          // from directly. checkoutUrl is the theme's own real checkout
-          // entry point, not a per-cart URL, since there's no separate
-          // Storefront-API cart object to link to anymore.
+          // from directly. checkoutUrl prefers a real UCP (Shopify Agentic
+          // Storefronts) checkout handoff — a genuine `create_cart` call
+          // through Shopify's own agent-commerce protocol, confirmed live to
+          // return a real `continue_url` straight into hosted checkout for
+          // these exact line items — falling back to the theme's static
+          // `/checkout` entry point if that call fails for any reason (rate
+          // limit, transient error, missing variant ids). Never blocks
+          // checkout on the new path working; it's a strict upgrade over the
+          // old generic link when it succeeds, never a new failure mode.
           if (session.cart) {
-            checkoutUrl = "/checkout";
+            checkoutUrl = (await createUcpCheckoutUrl(session.cart.lines).catch(() => null)) ?? "/checkout";
             cartValue = session.cart.totalAmount;
             cartNonEmpty = session.cart.totalQuantity > 0;
           }
